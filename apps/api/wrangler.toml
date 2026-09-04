@@ -1,0 +1,21 @@
+name = "aztspickleball-api"
+main = "src/index.ts"
+compatibility_date = "2024-09-25"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "pickleball_db"
+database_id = "71ed2033-3cf6-4a73-bc17-8b0478508b49"
+migrations_dir = "migrations"
+
+# Set these with: wrangler secret put <NAME>
+# JWT_SECRET            - random 32+ char string, signs session cookies
+# GOOGLE_CLIENT_ID      - OAuth client id from Google Cloud Console
+
+[vars]
+# Non-secret public config can go here
+APP_URL = "https://pickleball-8ky.pages.dev"
+
+[observability]
+enabled = true

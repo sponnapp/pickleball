@@ -1,0 +1,15 @@
+{
+  "name": "aztspickleball",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:api": "npm run dev --workspace=apps/api",
+    "dev:web": "npm run dev --workspace=apps/web",
+    "deploy:api": "npm run deploy --workspace=apps/api",
+    "deploy:web": "npm run deploy --workspace=apps/web",
+    "db:migrate:local": "npm run db:migrate:local --workspace=apps/api",
+    "db:migrate:remote": "npm run db:migrate:remote --workspace=apps/api"
+  }
+}
