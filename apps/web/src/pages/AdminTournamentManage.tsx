@@ -64,6 +64,12 @@ export function AdminTournamentManage() {
   const [topCount, setTopCount] = useState(4);
   const [error, setError] = useState<string | null>(null);
 
+  // CSV team import
+  const [csvError, setCsvError] = useState<string | null>(null);
+  const [csvTeams, setCsvTeams] = useState<
+    { name: string; player1_name: string; player2_name?: string; seed?: number; pool?: string }[]
+  >([]);
+
   // Match filters
   const [filterStage, setFilterStage] = useState<string>('all');
   const [filterStatus, setFilterStatus] = useState<string>('all');
@@ -127,6 +133,66 @@ export function AdminTournamentManage() {
     }
   };
 
+  // Splits a CSV line on commas, respecting double-quoted fields.
+  const splitCsvLine = (line: string) => {
+    const cells: string[] = [];
+    let cur = '';
+    let inQuotes = false;
+    for (const ch of line) {
+      if (ch === '"') {
+        inQuotes = !inQuotes;
+      } else if (ch === ',' && !inQuotes) {
+        cells.push(cur.trim());
+        cur = '';
+      } else {
+        cur += ch;
+      }
+    }
+    cells.push(cur.trim());
+    return cells;
+  };
+
+  const handleCsvFile = async (file: File) => {
+    setCsvError(null);
+    setCsvTeams([]);
+    try {
+      const text = await file.text();
+      const lines = text.split(/\r?\n/).filter((l) => l.trim() !== '');
+      if (lines.length < 2) throw new Error('CSV must have a header row and at least one team row');
+
+      const header = splitCsvLine(lines[0]).map((h) => h.toLowerCase());
+      const nameIdx = header.indexOf('name');
+      const p1Idx = header.indexOf('player1_name');
+      const p2Idx = header.indexOf('player2_name');
+      const seedIdx = header.indexOf('seed');
+      const poolIdx = header.indexOf('pool');
+      if (nameIdx === -1 || p1Idx === -1) {
+        throw new Error('CSV header must include "name" and "player1_name" columns');
+      }
+
+      const parsed = lines
+        .slice(1)
+        .map((line) => splitCsvLine(line))
+        .map((cells) => ({
+          name: cells[nameIdx] ?? '',
+          player1_name: cells[p1Idx] ?? '',
+          player2_name: p2Idx !== -1 && cells[p2Idx] ? cells[p2Idx] : undefined,
+          seed: seedIdx !== -1 && cells[seedIdx] ? Number(cells[seedIdx]) : undefined,
+          pool: poolIdx !== -1 && cells[poolIdx] ? cells[poolIdx] : undefined,
+        }))
+        .filter((t) => t.name && t.player1_name);
+
+      if (parsed.length === 0) throw new Error('No valid team rows found (name and player1_name are required)');
+      setCsvTeams(parsed);
+    } catch (err) {
+      setCsvError(err instanceof Error ? err.message : 'Failed to parse CSV');
+    }
+  };
+
+  const importCsvTeams = () => {
+    runAction(() => api.post(`/api/tournaments/${id}/teams/bulk`, { teams: csvTeams })).then(() => setCsvTeams([]));
+  };
+
   if (!tournament) return <p>Loading...</p>;
   if (accessDenied) return <p className="error">You are not assigned to manage this tournament.</p>;
 
@@ -134,54 +200,58 @@ export function AdminTournamentManage() {
     <div className="card">
       <h1>Manage: {tournament.name}</h1>
 
-      <section>
-        <h2>Details</h2>
-        <form onSubmit={saveDetails}>
-          <label>
-            Name
-            <input value={editName} onChange={(e) => setEditName(e.target.value)} required />
-          </label>
-          <label>
-            Description
-            <input value={editDescription} onChange={(e) => setEditDescription(e.target.value)} />
-          </label>
-          <label>
-            Format
-            <select value={editFormat} onChange={(e) => setEditFormat(e.target.value)}>
-              <option value="single_elimination">Single elimination</option>
-              <option value="double_elimination">Double elimination</option>
-              <option value="round_robin">Round robin</option>
-              <option value="pool_play">Pool play</option>
-            </select>
-          </label>
-          <label>
-            Start date
-            <input type="date" value={editStartDate} onChange={(e) => setEditStartDate(e.target.value)} />
-          </label>
-          <label>
-            End date
-            <input type="date" value={editEndDate} onChange={(e) => setEditEndDate(e.target.value)} />
-          </label>
-          {error && <p className="error">{error}</p>}
-          <button type="submit">Save changes</button>
-        </form>
-        <button className="button--danger" onClick={deleteTournament}>
-          Delete tournament
-        </button>
-      </section>
+      <div className="admin-row">
+        <section>
+          <h2>Details</h2>
+          <form className="form-grid" onSubmit={saveDetails}>
+            <label className="field-full">
+              Name
+              <input value={editName} onChange={(e) => setEditName(e.target.value)} required />
+            </label>
+            <label className="field-full">
+              Description
+              <input value={editDescription} onChange={(e) => setEditDescription(e.target.value)} />
+            </label>
+            <label>
+              Format
+              <select value={editFormat} onChange={(e) => setEditFormat(e.target.value)}>
+                <option value="single_elimination">Single elimination</option>
+                <option value="double_elimination">Double elimination</option>
+                <option value="round_robin">Round robin</option>
+                <option value="pool_play">Pool play</option>
+              </select>
+            </label>
+            <label>
+              Start date
+              <input type="date" value={editStartDate} onChange={(e) => setEditStartDate(e.target.value)} />
+            </label>
+            <label>
+              End date
+              <input type="date" value={editEndDate} onChange={(e) => setEditEndDate(e.target.value)} />
+            </label>
+            {error && <p className="error field-full">{error}</p>}
+            <div className="field-full form-grid__actions">
+              <button type="submit">Save changes</button>
+              <button type="button" className="button--danger" onClick={deleteTournament}>
+                Delete tournament
+              </button>
+            </div>
+          </form>
+        </section>
 
-      <section>
-        <h2>Status</h2>
-        <select
-          value={tournament.status}
-          onChange={(e) => runAction(() => api.patch(`/api/tournaments/${id}`, { status: e.target.value }))}
-        >
-          <option value="draft">Draft</option>
-          <option value="registration_open">Registration open</option>
-          <option value="in_progress">In progress</option>
-          <option value="completed">Completed</option>
-        </select>
-      </section>
+        <section>
+          <h2>Status</h2>
+          <select
+            value={tournament.status}
+            onChange={(e) => runAction(() => api.patch(`/api/tournaments/${id}`, { status: e.target.value }))}
+          >
+            <option value="draft">Draft</option>
+            <option value="registration_open">Registration open</option>
+            <option value="in_progress">In progress</option>
+            <option value="completed">Completed</option>
+          </select>
+        </section>
+      </div>
 
       <section>
         <h2>Courts</h2>
@@ -213,6 +283,8 @@ export function AdminTournamentManage() {
             <thead>
               <tr>
                 <th>Name</th>
+                <th>Player 1</th>
+                <th>Player 2</th>
                 <th>Seed</th>
                 <th>Pool</th>
                 <th></th>
@@ -221,7 +293,31 @@ export function AdminTournamentManage() {
             <tbody>
               {teams.map((t) => (
                 <tr key={t.id}>
-                  <td>{t.name}</td>
+                  <td>
+                    <input
+                      defaultValue={t.name}
+                      onBlur={(e) => runAction(() => api.patch(`/api/teams/${t.id}`, { name: e.target.value }))}
+                      style={{ minWidth: '8rem' }}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      defaultValue={t.player1_name}
+                      onBlur={(e) =>
+                        runAction(() => api.patch(`/api/teams/${t.id}`, { player1_name: e.target.value }))
+                      }
+                      style={{ minWidth: '7rem' }}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      defaultValue={t.player2_name ?? ''}
+                      onBlur={(e) =>
+                        runAction(() => api.patch(`/api/teams/${t.id}`, { player2_name: e.target.value || null }))
+                      }
+                      style={{ minWidth: '7rem' }}
+                    />
+                  </td>
                   <td>
                     <input
                       type="number"
@@ -266,76 +362,110 @@ export function AdminTournamentManage() {
           <input placeholder="Player 2 (optional)" value={player2} onChange={(e) => setPlayer2(e.target.value)} />
           <button type="submit">Add team</button>
         </form>
+
+        <div className="csv-upload">
+          <h3>Bulk upload teams</h3>
+          <label className="csv-upload__file-label">
+            Choose CSV file
+            <input
+              type="file"
+              accept=".csv"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleCsvFile(file);
+                e.target.value = '';
+              }}
+            />
+          </label>
+          <p className="csv-upload__hint">
+            Columns: <code>name</code>, <code>player1_name</code>, <code>player2_name</code> (optional),{' '}
+            <code>seed</code> (optional), <code>pool</code> (optional)
+          </p>
+          {csvError && <p className="error">{csvError}</p>}
+          {csvTeams.length > 0 && (
+            <div className="csv-upload__preview">
+              <span>{csvTeams.length} teams ready to import</span>
+              <button type="button" onClick={importCsvTeams}>
+                Import teams
+              </button>
+              <button type="button" className="button--outline" onClick={() => setCsvTeams([])}>
+                Cancel
+              </button>
+            </div>
+          )}
+        </div>
       </section>
 
-      <section>
-        <h2>Round 1 — Random Groups</h2>
-        <p>Randomly splits all teams into even groups and generates a round-robin schedule within each group.</p>
-        <label>
-          Number of groups
-          <input
-            type="number"
-            min={2}
-            max={26}
-            value={groupCount}
-            onChange={(e) => setGroupCount(Number(e.target.value))}
-            style={{ width: '4rem' }}
-          />
-        </label>
-        <button
-          onClick={() =>
-            runAction(() => api.post(`/api/tournaments/${id}/round1/generate-groups`, { groupCount }))
-          }
-        >
-          Generate Round 1 groups
-        </button>
-      </section>
+      <div className="admin-row">
+        <section>
+          <h2>Round 1 — Random Groups</h2>
+          <p>Randomly splits all teams into even groups and generates a round-robin schedule within each group.</p>
+          <label>
+            Number of groups
+            <input
+              type="number"
+              min={2}
+              max={26}
+              value={groupCount}
+              onChange={(e) => setGroupCount(Number(e.target.value))}
+              style={{ width: '4rem' }}
+            />
+          </label>
+          <button
+            onClick={() =>
+              runAction(() => api.post(`/api/tournaments/${id}/round1/generate-groups`, { groupCount }))
+            }
+          >
+            Generate Round 1 groups
+          </button>
+        </section>
 
-      <section>
-        <h2>Round 2 — Tier Assignment</h2>
-        <p>
-          Ranks all teams overall from Round 1 results and splits them into your chosen number of tiers,
-          generating a round-robin schedule within each tier.
-        </p>
-        <label>
-          Number of tier groups
-          <select value={tierCount} onChange={(e) => setTierCount(Number(e.target.value))}>
-            <option value={4}>4 Tiers (Platinum, Gold, Silver, Bronze)</option>
-            <option value={3}>3 Tiers (Platinum, Gold, Silver)</option>
-            <option value={2}>2 Tiers (Platinum, Gold)</option>
-            <option value={1}>1 Tier (Platinum only)</option>
-          </select>
-        </label>
-        <button
-          onClick={() =>
-            runAction(() => api.post(`/api/tournaments/${id}/round2/generate-tiers`, { tierCount }))
-          }
-        >
-          Generate Round 2 tiers
-        </button>
-      </section>
+        <section>
+          <h2>Round 2 — Tier Assignment</h2>
+          <p>
+            Ranks all teams overall from Round 1 results and splits them into your chosen number of tiers,
+            generating a round-robin schedule within each tier.
+          </p>
+          <label>
+            Number of tier groups
+            <select value={tierCount} onChange={(e) => setTierCount(Number(e.target.value))}>
+              <option value={4}>4 Tiers (Platinum, Gold, Silver, Bronze)</option>
+              <option value={3}>3 Tiers (Platinum, Gold, Silver)</option>
+              <option value={2}>2 Tiers (Platinum, Gold)</option>
+              <option value={1}>1 Tier (Platinum only)</option>
+            </select>
+          </label>
+          <button
+            onClick={() =>
+              runAction(() => api.post(`/api/tournaments/${id}/round2/generate-tiers`, { tierCount }))
+            }
+          >
+            Generate Round 2 tiers
+          </button>
+        </section>
 
-      <section>
-        <h2>Round 3 &amp; 4 — Playoff Knockout</h2>
-        <p>
-          Takes the top qualifying teams from each active tier's Round 2 standings into a knockout bracket.
-        </p>
-        <label>
-          Qualifying teams per tier
-          <select value={topCount} onChange={(e) => setTopCount(Number(e.target.value))}>
-            <option value={4}>Top 4 (Semifinals &amp; Final)</option>
-            <option value={2}>Top 2 (Final only)</option>
-            <option value={8}>Top 8 (Quarterfinals, Semifinals &amp; Final)</option>
-          </select>
-        </label>
-        <button
-          onClick={() =>
-            runAction(() => api.post(`/api/tournaments/${id}/round3/generate-knockout`, { topCount }))
-          }
-        >
-          Generate playoffs
-        </button>
-      </section>
+        <section>
+          <h2>Round 3 &amp; 4 — Playoff Knockout</h2>
+          <p>
+            Takes the top qualifying teams from each active tier's Round 2 standings into a knockout bracket.
+          </p>
+          <label>
+            Qualifying teams per tier
+            <select value={topCount} onChange={(e) => setTopCount(Number(e.target.value))}>
+              <option value={4}>Top 4 (Semifinals &amp; Final)</option>
+              <option value={2}>Top 2 (Final only)</option>
+              <option value={8}>Top 8 (Quarterfinals, Semifinals &amp; Final)</option>
+            </select>
+          </label>
+          <button
+            onClick={() =>
+              runAction(() => api.post(`/api/tournaments/${id}/round3/generate-knockout`, { topCount }))
+            }
+          >
+            Generate playoffs
+          </button>
+        </section>
+      </div>
 
       <section>
         <h2>Matches</h2>

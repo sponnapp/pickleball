@@ -48,45 +48,47 @@ export function AdminUsers() {
     <div className="card">
       <h1>Admin: Users</h1>
       {error && <p className="error">{error}</p>}
-      <table className="table">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Email</th>
-            <th>Role</th>
-          </tr>
-        </thead>
-        <tbody>
-          {users.map((u) => (
-            <Fragment key={u.id}>
-              <tr>
-                <td>{u.name}</td>
-                <td>{u.email}</td>
-                <td>
-                  <select
-                    value={u.role}
-                    disabled={savingId === u.id || u.id === currentUser?.id}
-                    onChange={(e) => changeRole(u, e.target.value as ManagedUser['role'])}
-                  >
-                    {ROLES.map((r) => (
-                      <option key={r} value={r}>
-                        {r}
-                      </option>
-                    ))}
-                  </select>
-                </td>
-              </tr>
-              {u.role === 'superuser' && (
+      <div className="table-container">
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Email</th>
+              <th>Role</th>
+            </tr>
+          </thead>
+          <tbody>
+            {users.map((u) => (
+              <Fragment key={u.id}>
                 <tr>
-                  <td colSpan={3}>
-                    <SuperuserTournamentPicker userId={u.id} tournaments={tournaments} />
+                  <td>{u.name}</td>
+                  <td>{u.email}</td>
+                  <td>
+                    <select
+                      value={u.role}
+                      disabled={savingId === u.id || u.id === currentUser?.id}
+                      onChange={(e) => changeRole(u, e.target.value as ManagedUser['role'])}
+                    >
+                      {ROLES.map((r) => (
+                        <option key={r} value={r}>
+                          {r}
+                        </option>
+                      ))}
+                    </select>
                   </td>
                 </tr>
-              )}
-            </Fragment>
-          ))}
-        </tbody>
-      </table>
+                {u.role === 'superuser' && (
+                  <tr>
+                    <td colSpan={3}>
+                      <SuperuserTournamentPicker userId={u.id} tournaments={tournaments} />
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

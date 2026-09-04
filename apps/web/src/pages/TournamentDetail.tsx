@@ -106,6 +106,7 @@ export function TournamentDetail() {
   const [filterGroup, setFilterGroup] = useState<string>('all');
   const [filterTeam, setFilterTeam] = useState<string>('all');
   const [collapsedDates, setCollapsedDates] = useState<Set<string>>(new Set());
+  const [collapsedTeamGroups, setCollapsedTeamGroups] = useState<Set<string>>(new Set());
 
   const load = () => {
     api.get<{ tournament: Tournament }>(`/api/tournaments/${id}`).then((r) => setTournament(r.tournament));
@@ -175,15 +176,51 @@ export function TournamentDetail() {
       {view === 'all' && (
         <>
           <h2>Teams</h2>
-          <ul className="list">
-            {teams.map((t) => (
-              <li key={t.id}>
-                {t.name} — {t.player1_name}
-                {t.player2_name ? ` / ${t.player2_name}` : ''}
-                {t.pool && <span className="tag">Group {t.pool}</span>}
-              </li>
-            ))}
-          </ul>
+          {(() => {
+            const teamGroups = teams.reduce<Record<string, Team[]>>((acc, t) => {
+              const key = t.pool ?? 'Ungrouped';
+              (acc[key] ??= []).push(t);
+              return acc;
+            }, {});
+            const groupKeys = Object.keys(teamGroups).sort((a, b) => {
+              if (a === 'Ungrouped') return 1;
+              if (b === 'Ungrouped') return -1;
+              return a.localeCompare(b);
+            });
+            const toggleGroup = (key: string) =>
+              setCollapsedTeamGroups((prev) => {
+                const next = new Set(prev);
+                if (next.has(key)) next.delete(key);
+                else next.add(key);
+                return next;
+              });
+
+            return groupKeys.map((key) => {
+              const groupTeams = teamGroups[key];
+              const isCollapsed = collapsedTeamGroups.has(key);
+              return (
+                <div key={key} className="team-group">
+                  <button type="button" className="team-group__header" onClick={() => toggleGroup(key)}>
+                    <span>{key === 'Ungrouped' ? 'Ungrouped' : `Group ${key}`}</span>
+                    <span className="team-group__header-right">
+                      <span>{groupTeams.length} teams</span>
+                      <span className={`team-group__chevron${isCollapsed ? '' : ' is-open'}`}>▾</span>
+                    </span>
+                  </button>
+                  {!isCollapsed && (
+                    <ul className="list team-group__body">
+                      {groupTeams.map((t) => (
+                        <li key={t.id}>
+                          {t.name} — {t.player1_name}
+                          {t.player2_name ? ` / ${t.player2_name}` : ''}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              );
+            });
+          })()}
           {user && tournament.status === 'registration_open' && (
             <form onSubmit={registerTeam}>
               <h3>Register a team</h3>

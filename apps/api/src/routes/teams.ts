@@ -36,6 +36,35 @@ teamRoutes.post('/tournaments/:tournamentId/teams', async (c) => {
   return c.json({ team: result }, 201);
 });
 
+// Admin bulk import (e.g. from a CSV upload), scoped to the tournament like other admin writes.
+teamRoutes.post(
+  '/tournaments/:tournamentId/teams/bulk',
+  requireAdmin,
+  requireTournamentManager(async (c) => c.req.param('tournamentId')),
+  async (c) => {
+    const tournamentId = c.req.param('tournamentId');
+    const body = await c.req.json<{
+      teams?: { name: string; player1_name: string; player2_name?: string; seed?: number; pool?: string }[];
+    }>();
+    if (!Array.isArray(body.teams) || body.teams.length === 0) {
+      return c.json({ error: 'teams array is required' }, 400);
+    }
+
+    const inserted = [];
+    for (const t of body.teams) {
+      if (!t || !t.name || !t.player1_name) continue;
+      const row = await c.env.DB.prepare(
+        `INSERT INTO teams (tournament_id, name, player1_name, player2_name, seed, pool) VALUES (?, ?, ?, ?, ?, ?) RETURNING *`
+      )
+        .bind(tournamentId, t.name, t.player1_name, t.player2_name ?? null, t.seed ?? null, t.pool ?? null)
+        .first();
+      if (row) inserted.push(row);
+    }
+    if (inserted.length === 0) return c.json({ error: 'No valid teams to import (name and player1_name required)' }, 400);
+    return c.json({ teams: inserted }, 201);
+  }
+);
+
 teamRoutes.patch('/teams/:id', requireAdmin, requireTournamentManager((c) => resolveTeamTournamentId(c.env.DB, c.req.param('id'))), async (c) => {
   const id = c.req.param('id');
   const body = await c.req.json<Record<string, unknown>>();
