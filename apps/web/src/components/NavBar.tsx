@@ -12,7 +12,7 @@ export function NavBar() {
 
   const navTabs = [
     { to: '/tournaments', key: 'tournaments', label: 'Tournaments' },
-    ...(user && (user.role === 'admin' || user.role === 'organizer')
+    ...(user && (user.role === 'admin' || user.role === 'organizer' || user.role === 'superuser')
       ? [{ to: '/admin', key: 'admin', label: 'Admin' }]
       : []),
     ...(user && user.role === 'admin' ? [{ to: '/admin/users', key: 'users', label: 'Users' }] : []),

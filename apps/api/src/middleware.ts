@@ -23,7 +23,7 @@ export async function requireAuth(c: Ctx, next: Next) {
 
 export async function requireAdmin(c: Ctx, next: Next) {
   const user = c.get('user');
-  if (!user || (user.role !== 'admin' && user.role !== 'organizer')) {
+  if (!user || !['admin', 'organizer', 'superuser'].includes(user.role)) {
     return c.json({ error: 'Admin access required' }, 403);
   }
   return next();
@@ -36,4 +36,24 @@ export async function requireSuperAdmin(c: Ctx, next: Next) {
     return c.json({ error: 'Admin access required' }, 403);
   }
   return next();
+}
+
+// Admins/organizers manage every tournament; superusers are scoped to tournaments they're
+// explicitly assigned to via tournament_managers. Must run after requireAdmin.
+export function requireTournamentManager(resolveTournamentId: (c: Ctx) => Promise<string | number | null | undefined>) {
+  return async (c: Ctx, next: Next) => {
+    const user = c.get('user')!;
+    if (user.role === 'admin' || user.role === 'organizer') return next();
+
+    const tournamentId = await resolveTournamentId(c);
+    if (!tournamentId) return c.json({ error: 'Not found' }, 404);
+
+    const access = await c.env.DB.prepare(
+      'SELECT 1 FROM tournament_managers WHERE user_id = ? AND tournament_id = ?'
+    )
+      .bind(user.id, tournamentId)
+      .first();
+    if (!access) return c.json({ error: 'You are not assigned to this tournament' }, 403);
+    return next();
+  };
 }

@@ -1,11 +1,32 @@
 import { Hono } from 'hono';
 import type { Env, Variables } from '../types';
-import { requireAdmin } from '../middleware';
+import { requireAdmin, requireTournamentManager } from '../middleware';
 import { computePoolStandings, computeTierStandings } from '../standings';
 
 export const tournamentRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 tournamentRoutes.get('/', async (c) => {
+  const { results } = await c.env.DB.prepare(
+    'SELECT id, name, description, format, status, start_date, end_date FROM tournaments ORDER BY start_date DESC'
+  ).all();
+  return c.json({ tournaments: results });
+});
+
+// Admin-area listing: superusers only see tournaments ("seasons") they're assigned to manage.
+tournamentRoutes.get('/admin', requireAdmin, async (c) => {
+  const user = c.get('user')!;
+  if (user.role === 'superuser') {
+    const { results } = await c.env.DB.prepare(
+      `SELECT t.id, t.name, t.description, t.format, t.status, t.start_date, t.end_date
+       FROM tournaments t
+       JOIN tournament_managers tm ON tm.tournament_id = t.id
+       WHERE tm.user_id = ?
+       ORDER BY t.start_date DESC`
+    )
+      .bind(user.id)
+      .all();
+    return c.json({ tournaments: results });
+  }
   const { results } = await c.env.DB.prepare(
     'SELECT id, name, description, format, status, start_date, end_date FROM tournaments ORDER BY start_date DESC'
   ).all();
@@ -21,6 +42,7 @@ tournamentRoutes.get('/:id', async (c) => {
 
 tournamentRoutes.post('/', requireAdmin, async (c) => {
   const user = c.get('user')!;
+  if (user.role === 'superuser') return c.json({ error: 'Superusers cannot create tournaments' }, 403);
   const body = await c.req.json<{
     name: string;
     description?: string;
@@ -39,7 +61,7 @@ tournamentRoutes.post('/', requireAdmin, async (c) => {
   return c.json({ tournament: result }, 201);
 });
 
-tournamentRoutes.patch('/:id', requireAdmin, async (c) => {
+tournamentRoutes.patch('/:id', requireAdmin, requireTournamentManager(async (c) => c.req.param('id')), async (c) => {
   const id = c.req.param('id');
   const body = await c.req.json<Record<string, unknown>>();
   const allowed = ['name', 'description', 'format', 'status', 'start_date', 'end_date'];
@@ -55,7 +77,7 @@ tournamentRoutes.patch('/:id', requireAdmin, async (c) => {
   return c.json({ tournament: updated });
 });
 
-tournamentRoutes.delete('/:id', requireAdmin, async (c) => {
+tournamentRoutes.delete('/:id', requireAdmin, requireTournamentManager(async (c) => c.req.param('id')), async (c) => {
   const id = c.req.param('id');
   await c.env.DB.prepare('DELETE FROM tournaments WHERE id = ?').bind(id).run();
   return c.json({ ok: true });

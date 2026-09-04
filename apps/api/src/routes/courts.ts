@@ -1,8 +1,14 @@
 import { Hono } from 'hono';
 import type { Env, Variables } from '../types';
-import { requireAdmin } from '../middleware';
+import { requireAdmin, requireTournamentManager } from '../middleware';
 
 export const courtRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
+
+async function resolveCourtTournamentId(db: Env['DB'], courtId: string | undefined) {
+  if (!courtId) return null;
+  const row = await db.prepare('SELECT tournament_id FROM courts WHERE id = ?').bind(courtId).first<{ tournament_id: number }>();
+  return row?.tournament_id ?? null;
+}
 
 courtRoutes.get('/tournaments/:tournamentId/courts', async (c) => {
   const tournamentId = c.req.param('tournamentId');
@@ -12,7 +18,7 @@ courtRoutes.get('/tournaments/:tournamentId/courts', async (c) => {
   return c.json({ courts: results });
 });
 
-courtRoutes.post('/tournaments/:tournamentId/courts', requireAdmin, async (c) => {
+courtRoutes.post('/tournaments/:tournamentId/courts', requireAdmin, requireTournamentManager(async (c) => c.req.param('tournamentId')), async (c) => {
   const tournamentId = c.req.param('tournamentId');
   const { name } = await c.req.json<{ name: string }>();
   if (!name) return c.json({ error: 'name is required' }, 400);
@@ -22,7 +28,7 @@ courtRoutes.post('/tournaments/:tournamentId/courts', requireAdmin, async (c) =>
   return c.json({ court: result }, 201);
 });
 
-courtRoutes.delete('/courts/:id', requireAdmin, async (c) => {
+courtRoutes.delete('/courts/:id', requireAdmin, requireTournamentManager((c) => resolveCourtTournamentId(c.env.DB, c.req.param('id'))), async (c) => {
   await c.env.DB.prepare('DELETE FROM courts WHERE id = ?').bind(c.req.param('id')).run();
   return c.json({ ok: true });
 });

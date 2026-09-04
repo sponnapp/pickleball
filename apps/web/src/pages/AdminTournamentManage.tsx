@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api, ApiError } from '../api';
+import { useAuth } from '../context/AuthContext';
 
 interface Tournament {
   id: number;
@@ -43,7 +44,9 @@ interface Match {
 export function AdminTournamentManage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [tournament, setTournament] = useState<Tournament | null>(null);
+  const [accessDenied, setAccessDenied] = useState(false);
   const [teams, setTeams] = useState<Team[]>([]);
   const [courts, setCourts] = useState<Court[]>([]);
   const [matches, setMatches] = useState<Match[]>([]);
@@ -82,6 +85,14 @@ export function AdminTournamentManage() {
   };
   useEffect(load, [id]);
 
+  // Superusers may only manage tournaments they're assigned to; verify against the admin-scoped list.
+  useEffect(() => {
+    if (user?.role !== 'superuser') return;
+    api
+      .get<{ tournaments: { id: number }[] }>('/api/tournaments/admin')
+      .then((r) => setAccessDenied(!r.tournaments.some((t) => String(t.id) === id)));
+  }, [user, id]);
+
   const runAction = async (fn: () => Promise<unknown>) => {
     setError(null);
     try {
@@ -117,6 +128,7 @@ export function AdminTournamentManage() {
   };
 
   if (!tournament) return <p>Loading...</p>;
+  if (accessDenied) return <p className="error">You are not assigned to manage this tournament.</p>;
 
   return (
     <div className="card">

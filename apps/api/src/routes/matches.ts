@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { Env, Variables } from '../types';
-import { requireAdmin } from '../middleware';
+import { requireAdmin, requireTournamentManager } from '../middleware';
 import {
   generateSingleElimination,
   generateDoubleElimination,
@@ -13,6 +13,12 @@ import {
 import { computeOverallRanking, computeTierStandings, assignTiers, type Tier } from '../standings';
 
 export const matchRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
+
+async function resolveMatchTournamentId(db: Env['DB'], matchId: string | undefined) {
+  if (!matchId) return null;
+  const row = await db.prepare('SELECT tournament_id FROM matches WHERE id = ?').bind(matchId).first<{ tournament_id: number }>();
+  return row?.tournament_id ?? null;
+}
 
 // Inserts a bracket plan's matches (tagged with the given round `stage`) and resolves
 // its advancement links to real row ids. Keying by stage keeps concurrent stages'
@@ -81,7 +87,7 @@ matchRoutes.get('/tournaments/:tournamentId/matches', async (c) => {
 
 // Generates the full match schedule for a tournament based on its format.
 // Regeneration is blocked once any match has results, to avoid wiping recorded scores.
-matchRoutes.post('/tournaments/:tournamentId/generate-bracket', requireAdmin, async (c) => {
+matchRoutes.post('/tournaments/:tournamentId/generate-bracket', requireAdmin, requireTournamentManager(async (c) => c.req.param('tournamentId')), async (c) => {
   const tournamentId = c.req.param('tournamentId')!;
   const tournament = await c.env.DB.prepare('SELECT * FROM tournaments WHERE id = ?')
     .bind(tournamentId)
@@ -146,7 +152,7 @@ async function blockIfCompleted(db: Env['DB'], tournamentId: string | number, st
 
 // Round 1: randomly splits all registered teams into `groupCount` even groups and
 // generates a round-robin pool-play schedule within each group.
-matchRoutes.post('/tournaments/:tournamentId/round1/generate-groups', requireAdmin, async (c) => {
+matchRoutes.post('/tournaments/:tournamentId/round1/generate-groups', requireAdmin, requireTournamentManager(async (c) => c.req.param('tournamentId')), async (c) => {
   const tournamentId = c.req.param('tournamentId')!;
   const body = await c.req.json<{ groupCount?: number }>().catch(() => ({}) as { groupCount?: number });
   const groupCount = Math.max(2, Math.min(26, body.groupCount ?? 4));
@@ -197,7 +203,7 @@ matchRoutes.post('/tournaments/:tournamentId/round1/generate-groups', requireAdm
 // Round 2: ranks all teams overall from Round 1 results, splits them into `tierCount` tiers
 // (e.g. 2 tiers = Platinum & Gold; 4 tiers = Platinum, Gold, Silver, Bronze), and generates
 // a tier round-robin schedule.
-matchRoutes.post('/tournaments/:tournamentId/round2/generate-tiers', requireAdmin, async (c) => {
+matchRoutes.post('/tournaments/:tournamentId/round2/generate-tiers', requireAdmin, requireTournamentManager(async (c) => c.req.param('tournamentId')), async (c) => {
   const tournamentId = c.req.param('tournamentId')!;
   const body = await c.req.json<{ tierCount?: number }>().catch(() => ({}) as { tierCount?: number });
   const tierCount = Math.max(1, Math.min(4, body.tierCount ?? 4));
@@ -243,7 +249,7 @@ matchRoutes.post('/tournaments/:tournamentId/round2/generate-tiers', requireAdmi
 
 // Round 3/4: within each active tier, takes top qualifying teams (e.g. top 2 for straight final,
 // top 4 for semifinal + final) from Round 2 tier standings into a knockout bracket.
-matchRoutes.post('/tournaments/:tournamentId/round3/generate-knockout', requireAdmin, async (c) => {
+matchRoutes.post('/tournaments/:tournamentId/round3/generate-knockout', requireAdmin, requireTournamentManager(async (c) => c.req.param('tournamentId')), async (c) => {
   const tournamentId = c.req.param('tournamentId')!;
   const body = await c.req.json<{ topCount?: number }>().catch(() => ({}) as { topCount?: number });
   const topCount = Math.max(2, Math.min(16, body.topCount ?? 4));
@@ -324,7 +330,7 @@ matchRoutes.get('/tournaments/:tournamentId/tier-results', async (c) => {
   return c.json({ tierResults });
 });
 
-matchRoutes.patch('/matches/:id', requireAdmin, async (c) => {
+matchRoutes.patch('/matches/:id', requireAdmin, requireTournamentManager((c) => resolveMatchTournamentId(c.env.DB, c.req.param('id'))), async (c) => {
   const id = c.req.param('id');
   const body = await c.req.json<Record<string, unknown>>();
   const allowed = ['court_id', 'scheduled_time', 'status', 'team1_id', 'team2_id'];
@@ -342,7 +348,7 @@ matchRoutes.patch('/matches/:id', requireAdmin, async (c) => {
 
 // Records a completed match score and auto-advances the winner to the next match, if any.
 // Date/time and valid score are strictly mandatory before declaring a winner.
-matchRoutes.patch('/matches/:id/score', requireAdmin, async (c) => {
+matchRoutes.patch('/matches/:id/score', requireAdmin, requireTournamentManager((c) => resolveMatchTournamentId(c.env.DB, c.req.param('id'))), async (c) => {
   const id = c.req.param('id');
   const body = await c.req.json<{
     games: { team1: number; team2: number }[];

@@ -176,6 +176,11 @@ h6 {
   color: #e74c3c;
   border-color: rgba(231, 76, 60, 0.3);
 }
+.role-badge--superuser {
+  background: rgba(243, 156, 18, 0.2);
+  color: #f39c12;
+  border-color: rgba(243, 156, 18, 0.3);
+}
 
 .header-logout-btn {
   background: linear-gradient(135deg, #c0392b, #e74c3c);
@@ -935,6 +940,38 @@ button.button--danger:hover,
   font-size: 0.8rem;
   font-weight: 700;
   color: #15803d;
+}
+
+.superuser-seasons {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.4rem 0.2rem;
+}
+
+.superuser-seasons__label {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #146c43;
+  white-space: nowrap;
+}
+
+.superuser-seasons__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  flex: 1;
+}
+
+.superuser-seasons__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: #1a1a1a;
+  white-space: nowrap;
 }
 
 .score-display-row {
