@@ -23,25 +23,36 @@ export function Login() {
   };
 
   return (
-    <div className="card">
-      <h1>Log in</h1>
-      <form onSubmit={handleSubmit}>
-        <label>
-          Email
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-        </label>
-        <label>
-          Password
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
-        </label>
-        {error && <p className="error">{error}</p>}
-        <button type="submit">Log in</button>
-      </form>
-      <div className="divider">or</div>
-      <GoogleLoginButton />
-      <p>
-        No account? <Link to="/register">Sign up</Link>
-      </p>
+    <div className="auth-shell">
+      <aside className="auth-aside">
+        <img src="/azts-logo.png" alt="Arizona Tamil Sangam" className="auth-logo" />
+        <p className="eyebrow">AZTS PICKLEBALL COMMUNITY</p>
+        <h1>Good games start with good people.</h1>
+        <p className="auth-aside__copy">Keep up with local tournaments, follow every match, and find your place on the court.</p>
+        <div className="auth-aside__footer"><span>01</span><span>Play local. Play together.</span></div>
+      </aside>
+      <section className="auth-panel">
+        <div className="auth-panel__heading">
+          <p className="eyebrow eyebrow--dark">WELCOME BACK</p>
+          <h2>Log in</h2>
+          <p>Enter your details to continue to AZTS Pickleball.</p>
+        </div>
+        <form onSubmit={handleSubmit} className="auth-form">
+          <label>
+            Email
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" required />
+          </label>
+          <label>
+            Password
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Enter your password" required />
+          </label>
+          {error && <p className="error">{error}</p>}
+          <button type="submit">Log in <span aria-hidden="true">-&gt;</span></button>
+        </form>
+        <div className="divider"><span>or continue with</span></div>
+        <div className="auth-google"><GoogleLoginButton /></div>
+        <p className="auth-switch">No account? <Link to="/register">Create one</Link></p>
+      </section>
     </div>
   );
 }

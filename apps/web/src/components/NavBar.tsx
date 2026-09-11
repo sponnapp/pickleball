@@ -22,7 +22,7 @@ export function NavBar() {
     <header className="app-header">
       <div className="header-top-row">
         <NavLink to="/" className="header-brand">
-          <span className="header-brand-icon">🥒</span>
+          <img src="/azts-logo.png" alt="Arizona Tamil Sangam" className="header-brand-logo" />
           <span className="header-brand-text">AZTS Pickleball</span>
         </NavLink>
 
