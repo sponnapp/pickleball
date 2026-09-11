@@ -128,6 +128,11 @@ export function TournamentDetail() {
 
   useEffect(load, [id]);
 
+  useEffect(() => {
+    const groupKeys = new Set(teams.map((team) => team.pool ?? 'Ungrouped'));
+    setCollapsedTeamGroups(groupKeys);
+  }, [teams]);
+
   const registerTeam = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
