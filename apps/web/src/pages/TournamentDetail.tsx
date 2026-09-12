@@ -141,33 +141,35 @@ function getTournamentWinners(
     return winners;
   }
 
-  // 2. Bracket Final Matches (Single / Double Elimination / Main Brackets)
-  if (matches.length > 0) {
-    const maxStage = Math.max(...matches.map((m) => m.stage));
-    const stageMatches = matches.filter((m) => m.stage === maxStage);
-    const maxRound = Math.max(...stageMatches.map((m) => m.round));
-    const finalMatches = stageMatches.filter(
-      (m) => m.round === maxRound && m.status === 'completed' && m.winner_id
+  // 2. Bracket Final Matches (Single Elimination / Double Elimination)
+  if (
+    (tournament.format === 'single_elimination' || tournament.format === 'double_elimination') &&
+    matches.length > 0
+  ) {
+    const bracketMatches = matches.filter(
+      (m) => m.bracket_type === 'main' || m.bracket_type === 'winners'
     );
+    if (bracketMatches.length > 0) {
+      const maxRound = Math.max(...bracketMatches.map((m) => m.round));
+      const finalMatch = bracketMatches.find(
+        (m) => m.round === maxRound && m.status === 'completed' && m.winner_id
+      );
 
-    if (finalMatches.length > 0) {
-      for (const m of finalMatches) {
-        const winnerName = m.winner_id === m.team1_id ? m.team1_name : m.team2_name;
-        const runnerUpName = m.winner_id === m.team1_id ? m.team2_name : m.team1_name;
+      if (finalMatch) {
+        const winnerName =
+          finalMatch.winner_id === finalMatch.team1_id ? finalMatch.team1_name : finalMatch.team2_name;
+        const runnerUpName =
+          finalMatch.winner_id === finalMatch.team1_id ? finalMatch.team2_name : finalMatch.team1_name;
         if (winnerName) {
-          const bracketLabel =
-            m.bracket_type === 'main' || m.bracket_type === 'winners'
-              ? 'Tournament Champion'
-              : `${m.bracket_type.toUpperCase()} Champion`;
           winners.push({
-            label: bracketLabel,
+            label: 'Tournament Champion',
             winner: winnerName,
             runnerUp: runnerUpName,
-            tier: m.bracket_type,
+            tier: finalMatch.bracket_type,
           });
+          return winners;
         }
       }
-      if (winners.length > 0) return winners;
     }
   }
 
