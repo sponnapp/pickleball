@@ -41,6 +41,21 @@ interface Match {
   winner_id: number | null;
 }
 
+function defaultStartDateTime(startDateStr: string | null | undefined, defaultTime = '09:00'): string {
+  if (!startDateStr || !startDateStr.trim()) {
+    const today = new Date().toISOString().slice(0, 10);
+    return `${today}T${defaultTime}`;
+  }
+  const str = startDateStr.trim();
+  if (str.length === 10) {
+    return `${str}T${defaultTime}`;
+  }
+  if (str.includes(' ') && !str.includes('T')) {
+    return str.replace(' ', 'T').slice(0, 16);
+  }
+  return str.slice(0, 16);
+}
+
 export function AdminTournamentManage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -57,12 +72,21 @@ export function AdminTournamentManage() {
   const [editName, setEditName] = useState('');
   const [editDescription, setEditDescription] = useState('');
   const [editFormat, setEditFormat] = useState('single_elimination');
+  const [editStatus, setEditStatus] = useState('draft');
   const [editStartDate, setEditStartDate] = useState('');
   const [editEndDate, setEditEndDate] = useState('');
   const [groupCount, setGroupCount] = useState(4);
   const [tierCount, setTierCount] = useState(4);
   const [topCount, setTopCount] = useState(4);
   const [error, setError] = useState<string | null>(null);
+
+  // Round start times
+  const [r1StartTime, setR1StartTime] = useState('');
+  const [r2StartTime, setR2StartTime] = useState('');
+  const [r3StartTime, setR3StartTime] = useState('');
+  const [bracketStartTime, setBracketStartTime] = useState('');
+  const [autoStartTime, setAutoStartTime] = useState('');
+  const [autoStage, setAutoStage] = useState<number>(0);
 
   // CSV team import
   const [csvError, setCsvError] = useState<string | null>(null);
@@ -82,8 +106,16 @@ export function AdminTournamentManage() {
       setEditName(r.tournament.name);
       setEditDescription(r.tournament.description ?? '');
       setEditFormat(r.tournament.format);
+      setEditStatus(r.tournament.status);
       setEditStartDate(r.tournament.start_date ?? '');
       setEditEndDate(r.tournament.end_date ?? '');
+
+      const defaultDT = defaultStartDateTime(r.tournament.start_date);
+      setR1StartTime((prev) => prev || defaultDT);
+      setR2StartTime((prev) => prev || defaultDT);
+      setR3StartTime((prev) => prev || defaultDT);
+      setBracketStartTime((prev) => prev || defaultDT);
+      setAutoStartTime((prev) => prev || defaultDT);
     });
     api.get<{ teams: Team[] }>(`/api/tournaments/${id}/teams`).then((r) => setTeams(r.teams));
     api.get<{ courts: Court[] }>(`/api/tournaments/${id}/courts`).then((r) => setCourts(r.courts));
@@ -116,6 +148,7 @@ export function AdminTournamentManage() {
         name: editName,
         description: editDescription || null,
         format: editFormat,
+        status: editStatus,
         start_date: editStartDate || null,
         end_date: editEndDate || null,
       })
@@ -201,7 +234,7 @@ export function AdminTournamentManage() {
       <h1>Manage: {tournament.name}</h1>
 
       <div className="admin-row">
-        <section>
+        <section style={{ marginBottom: 0 }}>
           <h2>Details</h2>
           <form className="form-grid" onSubmit={saveDetails}>
             <label className="field-full">
@@ -222,6 +255,22 @@ export function AdminTournamentManage() {
               </select>
             </label>
             <label>
+              Status
+              <select
+                value={editStatus}
+                onChange={(e) => {
+                  const newStatus = e.target.value;
+                  setEditStatus(newStatus);
+                  runAction(() => api.patch(`/api/tournaments/${id}`, { status: newStatus }));
+                }}
+              >
+                <option value="draft">Draft</option>
+                <option value="registration_open">Registration open</option>
+                <option value="in_progress">In progress</option>
+                <option value="completed">Completed</option>
+              </select>
+            </label>
+            <label>
               Start date
               <input type="date" value={editStartDate} onChange={(e) => setEditStartDate(e.target.value)} />
             </label>
@@ -239,42 +288,70 @@ export function AdminTournamentManage() {
           </form>
         </section>
 
-        <section>
-          <h2>Status</h2>
-          <select
-            value={tournament.status}
-            onChange={(e) => runAction(() => api.patch(`/api/tournaments/${id}`, { status: e.target.value }))}
+        <section style={{ marginBottom: 0 }}>
+          <h2>Courts &amp; Scheduling</h2>
+          <ul className="list">
+            {courts.map((c) => (
+              <li key={c.id}>
+                {c.name}{' '}
+                <button onClick={() => runAction(() => api.delete(`/api/courts/${c.id}`))}>Remove</button>
+              </li>
+            ))}
+          </ul>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              runAction(() => api.post(`/api/tournaments/${id}/courts`, { name: courtName })).then(() =>
+                setCourtName('')
+              );
+            }}
           >
-            <option value="draft">Draft</option>
-            <option value="registration_open">Registration open</option>
-            <option value="in_progress">In progress</option>
-            <option value="completed">Completed</option>
-          </select>
+            <input placeholder="Court name" value={courtName} onChange={(e) => setCourtName(e.target.value)} required />
+            <button type="submit">Add court</button>
+          </form>
+
+          <div style={{ marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid rgba(0,0,0,0.1)' }}>
+            <h3>Auto-Schedule Courts &amp; Times</h3>
+            <p style={{ fontSize: '0.88rem', color: '#555', marginBottom: '0.75rem' }}>
+              Assigns matches to available courts in 20-minute slots starting from your chosen start time.
+            </p>
+            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <label>
+                Round Start Time
+                <input
+                  type="datetime-local"
+                  value={autoStartTime}
+                  onChange={(e) => setAutoStartTime(e.target.value)}
+                  required
+                />
+              </label>
+              <label>
+                Stage / Round
+                <select value={autoStage} onChange={(e) => setAutoStage(Number(e.target.value))}>
+                  <option value={0}>All Rounds</option>
+                  <option value={1}>Round 1 (Groups)</option>
+                  <option value={2}>Round 2 (Tiers)</option>
+                  <option value={3}>Round 3 (Playoffs)</option>
+                </select>
+              </label>
+              <button
+                type="button"
+                className="button button--outline"
+                onClick={() =>
+                  runAction(() =>
+                    api.post(`/api/tournaments/${id}/auto-schedule`, {
+                      startTime: autoStartTime,
+                      stage: autoStage || undefined,
+                    })
+                  )
+                }
+              >
+                Auto-schedule
+              </button>
+            </div>
+          </div>
         </section>
       </div>
-
-      <section>
-        <h2>Courts</h2>
-        <ul className="list">
-          {courts.map((c) => (
-            <li key={c.id}>
-              {c.name}{' '}
-              <button onClick={() => runAction(() => api.delete(`/api/courts/${c.id}`))}>Remove</button>
-            </li>
-          ))}
-        </ul>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            runAction(() => api.post(`/api/tournaments/${id}/courts`, { name: courtName })).then(() =>
-              setCourtName('')
-            );
-          }}
-        >
-          <input placeholder="Court name" value={courtName} onChange={(e) => setCourtName(e.target.value)} required />
-          <button type="submit">Add court</button>
-        </form>
-      </section>
 
       <section>
         <h2>Teams ({teams.length})</h2>
@@ -400,20 +477,36 @@ export function AdminTournamentManage() {
         <section>
           <h2>Round 1 — Random Groups</h2>
           <p>Randomly splits all teams into even groups and generates a round-robin schedule within each group.</p>
-          <label>
-            Number of groups
-            <input
-              type="number"
-              min={2}
-              max={26}
-              value={groupCount}
-              onChange={(e) => setGroupCount(Number(e.target.value))}
-              style={{ width: '4rem' }}
-            />
-          </label>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1rem' }}>
+            <label>
+              Number of groups
+              <input
+                type="number"
+                min={2}
+                max={26}
+                value={groupCount}
+                onChange={(e) => setGroupCount(Number(e.target.value))}
+                style={{ width: '5rem' }}
+              />
+            </label>
+            <label>
+              Round 1 Start Time
+              <input
+                type="datetime-local"
+                value={r1StartTime}
+                onChange={(e) => setR1StartTime(e.target.value)}
+                required
+              />
+            </label>
+          </div>
           <button
             onClick={() =>
-              runAction(() => api.post(`/api/tournaments/${id}/round1/generate-groups`, { groupCount }))
+              runAction(() =>
+                api.post(`/api/tournaments/${id}/round1/generate-groups`, {
+                  groupCount,
+                  startTime: r1StartTime,
+                })
+              )
             }
           >
             Generate Round 1 groups
@@ -426,18 +519,34 @@ export function AdminTournamentManage() {
             Ranks all teams overall from Round 1 results and splits them into your chosen number of tiers,
             generating a round-robin schedule within each tier.
           </p>
-          <label>
-            Number of tier groups
-            <select value={tierCount} onChange={(e) => setTierCount(Number(e.target.value))}>
-              <option value={4}>4 Tiers (Platinum, Gold, Silver, Bronze)</option>
-              <option value={3}>3 Tiers (Platinum, Gold, Silver)</option>
-              <option value={2}>2 Tiers (Platinum, Gold)</option>
-              <option value={1}>1 Tier (Platinum only)</option>
-            </select>
-          </label>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1rem' }}>
+            <label>
+              Number of tier groups
+              <select value={tierCount} onChange={(e) => setTierCount(Number(e.target.value))}>
+                <option value={4}>4 Tiers (Platinum, Gold, Silver, Bronze)</option>
+                <option value={3}>3 Tiers (Platinum, Gold, Silver)</option>
+                <option value={2}>2 Tiers (Platinum, Gold)</option>
+                <option value={1}>1 Tier (Platinum only)</option>
+              </select>
+            </label>
+            <label>
+              Round 2 Start Time
+              <input
+                type="datetime-local"
+                value={r2StartTime}
+                onChange={(e) => setR2StartTime(e.target.value)}
+                required
+              />
+            </label>
+          </div>
           <button
             onClick={() =>
-              runAction(() => api.post(`/api/tournaments/${id}/round2/generate-tiers`, { tierCount }))
+              runAction(() =>
+                api.post(`/api/tournaments/${id}/round2/generate-tiers`, {
+                  tierCount,
+                  startTime: r2StartTime,
+                })
+              )
             }
           >
             Generate Round 2 tiers
@@ -449,23 +558,67 @@ export function AdminTournamentManage() {
           <p>
             Takes the top qualifying teams from each active tier's Round 2 standings into a knockout bracket.
           </p>
-          <label>
-            Qualifying teams per tier
-            <select value={topCount} onChange={(e) => setTopCount(Number(e.target.value))}>
-              <option value={4}>Top 4 (Semifinals &amp; Final)</option>
-              <option value={2}>Top 2 (Final only)</option>
-              <option value={8}>Top 8 (Quarterfinals, Semifinals &amp; Final)</option>
-            </select>
-          </label>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1rem' }}>
+            <label>
+              Qualifying teams per tier
+              <select value={topCount} onChange={(e) => setTopCount(Number(e.target.value))}>
+                <option value={4}>Top 4 (Semifinals &amp; Final)</option>
+                <option value={2}>Top 2 (Final only)</option>
+                <option value={8}>Top 8 (Quarterfinals, Semifinals &amp; Final)</option>
+              </select>
+            </label>
+            <label>
+              Playoffs Start Time
+              <input
+                type="datetime-local"
+                value={r3StartTime}
+                onChange={(e) => setR3StartTime(e.target.value)}
+                required
+              />
+            </label>
+          </div>
           <button
             onClick={() =>
-              runAction(() => api.post(`/api/tournaments/${id}/round3/generate-knockout`, { topCount }))
+              runAction(() =>
+                api.post(`/api/tournaments/${id}/round3/generate-knockout`, {
+                  topCount,
+                  startTime: r3StartTime,
+                })
+              )
             }
           >
             Generate playoffs
           </button>
         </section>
       </div>
+
+      {['single_elimination', 'double_elimination', 'round_robin', 'pool_play'].includes(tournament.format) && (
+        <section style={{ marginTop: '1rem' }}>
+          <h2>Full Bracket Schedule ({tournament.format.replace('_', ' ')})</h2>
+          <p>Generates the initial bracket and schedules matches across courts starting from your selected round start time.</p>
+          <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <label>
+              Round Start Time
+              <input
+                type="datetime-local"
+                value={bracketStartTime}
+                onChange={(e) => setBracketStartTime(e.target.value)}
+                required
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() =>
+                runAction(() =>
+                  api.post(`/api/tournaments/${id}/generate-bracket`, { startTime: bracketStartTime })
+                )
+              }
+            >
+              Generate Bracket
+            </button>
+          </div>
+        </section>
+      )}
 
       <section>
         <h2>Matches</h2>

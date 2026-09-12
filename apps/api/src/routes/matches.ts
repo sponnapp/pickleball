@@ -58,6 +58,119 @@ function shuffle<T>(items: T[]): T[] {
   return arr;
 }
 
+function parseStartDate(startDateStr: string | null | undefined): Date {
+  if (!startDateStr || !startDateStr.trim()) {
+    const d = new Date();
+    d.setHours(9, 0, 0, 0);
+    return d;
+  }
+  let str = startDateStr.trim();
+  if (str.length === 10) {
+    str += 'T09:00:00';
+  } else if (str.includes(' ') && !str.includes('T')) {
+    str = str.replace(' ', 'T');
+  }
+  const d = new Date(str);
+  if (isNaN(d.getTime())) {
+    const fallback = new Date();
+    fallback.setHours(9, 0, 0, 0);
+    return fallback;
+  }
+  return d;
+}
+
+function formatDateTimeLocal(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const year = d.getFullYear();
+  const month = pad(d.getMonth() + 1);
+  const day = pad(d.getDate());
+  const hours = pad(d.getHours());
+  const mins = pad(d.getMinutes());
+  return `${year}-${month}-${day}T${hours}:${mins}`;
+}
+
+export async function autoScheduleMatches(
+  db: Env['DB'],
+  tournamentId: string | number,
+  startTime?: string | null,
+  targetStage?: number | null
+) {
+  const tournament = await db
+    .prepare('SELECT start_date FROM tournaments WHERE id = ?')
+    .bind(tournamentId)
+    .first<{ start_date: string | null }>();
+
+  const startDate = parseStartDate(startTime || tournament?.start_date);
+
+  let { results: courts } = await db
+    .prepare('SELECT id, name FROM courts WHERE tournament_id = ? ORDER BY id ASC')
+    .bind(tournamentId)
+    .all<{ id: number; name: string }>();
+
+  if (!courts || courts.length === 0) {
+    const defaultCourt = await db
+      .prepare("INSERT INTO courts (tournament_id, name) VALUES (?, 'Court 1') RETURNING id, name")
+      .bind(tournamentId)
+      .first<{ id: number; name: string }>();
+    if (defaultCourt) {
+      courts = [defaultCourt];
+    }
+  }
+
+  if (!courts || courts.length === 0) return;
+
+  const stageFilter = targetStage ? 'AND stage = ?' : '';
+  const queryParams = targetStage ? [tournamentId, targetStage] : [tournamentId];
+
+  const { results: matches } = await db
+    .prepare(
+      `SELECT id, stage, round, match_number, bracket_type
+       FROM matches
+       WHERE tournament_id = ? ${stageFilter}
+       ORDER BY stage ASC, round ASC,
+         CASE bracket_type
+           WHEN 'pool' THEN 1
+           WHEN 'platinum' THEN 2
+           WHEN 'gold' THEN 3
+           WHEN 'silver' THEN 4
+           WHEN 'bronze' THEN 5
+           ELSE 6
+         END,
+         match_number ASC`
+    )
+    .bind(...queryParams)
+    .all<{ id: number; stage: number; round: number; match_number: number; bracket_type: string }>();
+
+  if (!matches || matches.length === 0) return;
+
+  const numCourts = courts.length;
+  let currentSlotCourts: { id: number; name: string }[] = [];
+
+  for (let i = 0; i < matches.length; i++) {
+    const match = matches[i];
+    const slotIndex = Math.floor(i / numCourts);
+
+    // Assume 20 mins for each game
+    const matchTime = new Date(startDate.getTime() + slotIndex * 20 * 60 * 1000);
+    const scheduledTime = formatDateTimeLocal(matchTime);
+
+    let courtId: number;
+    if (numCourts === 1) {
+      courtId = courts[0].id;
+    } else {
+      if (i % numCourts === 0) {
+        currentSlotCourts = shuffle([...courts]);
+      }
+      courtId = currentSlotCourts[i % numCourts].id;
+    }
+
+    await db
+      .prepare('UPDATE matches SET court_id = ?, scheduled_time = ? WHERE id = ?')
+      .bind(courtId, scheduledTime, match.id)
+      .run();
+  }
+}
+
 const POOL_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
 matchRoutes.get('/tournaments/:tournamentId/matches', async (c) => {
@@ -89,6 +202,7 @@ matchRoutes.get('/tournaments/:tournamentId/matches', async (c) => {
 // Regeneration is blocked once any match has results, to avoid wiping recorded scores.
 matchRoutes.post('/tournaments/:tournamentId/generate-bracket', requireAdmin, requireTournamentManager(async (c) => c.req.param('tournamentId')), async (c) => {
   const tournamentId = c.req.param('tournamentId')!;
+  const body = await c.req.json<{ startTime?: string }>().catch(() => ({}) as { startTime?: string });
   const tournament = await c.env.DB.prepare('SELECT * FROM tournaments WHERE id = ?')
     .bind(tournamentId)
     .first<{ id: number; format: string }>();
@@ -133,6 +247,7 @@ matchRoutes.post('/tournaments/:tournamentId/generate-bracket', requireAdmin, re
 
   await c.env.DB.prepare('DELETE FROM matches WHERE tournament_id = ?').bind(tournamentId).run();
   await insertBracketPlan(c.env.DB, tournamentId, 1, plan);
+  await autoScheduleMatches(c.env.DB, tournamentId, body.startTime, 1);
 
   const { results } = await c.env.DB.prepare(
     'SELECT * FROM matches WHERE tournament_id = ? ORDER BY bracket_type, round, match_number'
@@ -154,7 +269,7 @@ async function blockIfCompleted(db: Env['DB'], tournamentId: string | number, st
 // generates a round-robin pool-play schedule within each group.
 matchRoutes.post('/tournaments/:tournamentId/round1/generate-groups', requireAdmin, requireTournamentManager(async (c) => c.req.param('tournamentId')), async (c) => {
   const tournamentId = c.req.param('tournamentId')!;
-  const body = await c.req.json<{ groupCount?: number }>().catch(() => ({}) as { groupCount?: number });
+  const body = await c.req.json<{ groupCount?: number; startTime?: string }>().catch(() => ({}) as { groupCount?: number; startTime?: string });
   const groupCount = Math.max(2, Math.min(26, body.groupCount ?? 4));
 
   if (await blockIfCompleted(c.env.DB, tournamentId, 1)) {
@@ -192,6 +307,8 @@ matchRoutes.post('/tournaments/:tournamentId/round1/generate-groups', requireAdm
     await insertBracketPlan(c.env.DB, tournamentId, 1, plan);
   }
 
+  await autoScheduleMatches(c.env.DB, tournamentId, body.startTime, 1);
+
   const { results } = await c.env.DB.prepare(
     'SELECT * FROM matches WHERE tournament_id = ? AND stage = 1 ORDER BY bracket_type, round, match_number'
   )
@@ -205,7 +322,7 @@ matchRoutes.post('/tournaments/:tournamentId/round1/generate-groups', requireAdm
 // a tier round-robin schedule.
 matchRoutes.post('/tournaments/:tournamentId/round2/generate-tiers', requireAdmin, requireTournamentManager(async (c) => c.req.param('tournamentId')), async (c) => {
   const tournamentId = c.req.param('tournamentId')!;
-  const body = await c.req.json<{ tierCount?: number }>().catch(() => ({}) as { tierCount?: number });
+  const body = await c.req.json<{ tierCount?: number; startTime?: string }>().catch(() => ({}) as { tierCount?: number; startTime?: string });
   const tierCount = Math.max(1, Math.min(4, body.tierCount ?? 4));
 
   if (await blockIfCompleted(c.env.DB, tournamentId, 2)) {
@@ -239,6 +356,8 @@ matchRoutes.post('/tournaments/:tournamentId/round2/generate-tiers', requireAdmi
     created[tier] = tierTeamIds.length;
   }
 
+  await autoScheduleMatches(c.env.DB, tournamentId, body.startTime, 2);
+
   const { results } = await c.env.DB.prepare(
     'SELECT * FROM matches WHERE tournament_id = ? AND stage = 2 ORDER BY bracket_type, round, match_number'
   )
@@ -251,7 +370,7 @@ matchRoutes.post('/tournaments/:tournamentId/round2/generate-tiers', requireAdmi
 // top 4 for semifinal + final) from Round 2 tier standings into a knockout bracket.
 matchRoutes.post('/tournaments/:tournamentId/round3/generate-knockout', requireAdmin, requireTournamentManager(async (c) => c.req.param('tournamentId')), async (c) => {
   const tournamentId = c.req.param('tournamentId')!;
-  const body = await c.req.json<{ topCount?: number }>().catch(() => ({}) as { topCount?: number });
+  const body = await c.req.json<{ topCount?: number; startTime?: string }>().catch(() => ({}) as { topCount?: number; startTime?: string });
   const topCount = Math.max(2, Math.min(16, body.topCount ?? 4));
 
   if (await blockIfCompleted(c.env.DB, tournamentId, 3)) {
@@ -277,12 +396,33 @@ matchRoutes.post('/tournaments/:tournamentId/round3/generate-knockout', requireA
     created[tier] = qualifying.length;
   }
 
+  await autoScheduleMatches(c.env.DB, tournamentId, body.startTime, 3);
+
   const { results } = await c.env.DB.prepare(
     'SELECT * FROM matches WHERE tournament_id = ? AND stage = 3 ORDER BY bracket_type, round, match_number'
   )
     .bind(tournamentId)
     .all();
   return c.json({ tiers: created, matches: results }, 201);
+});
+
+// Explicit endpoint to trigger/re-trigger auto-scheduling of courts and 20-minute time slots for matches.
+matchRoutes.post('/tournaments/:tournamentId/auto-schedule', requireAdmin, requireTournamentManager(async (c) => c.req.param('tournamentId')), async (c) => {
+  const tournamentId = c.req.param('tournamentId')!;
+  const body = await c.req.json<{ startTime?: string; stage?: number }>().catch(() => ({}) as { startTime?: string; stage?: number });
+  await autoScheduleMatches(c.env.DB, tournamentId, body.startTime, body.stage);
+  const { results } = await c.env.DB.prepare(
+    `SELECT m.*, t1.name AS team1_name, t2.name AS team2_name, co.name AS court_name
+     FROM matches m
+     LEFT JOIN teams t1 ON t1.id = m.team1_id
+     LEFT JOIN teams t2 ON t2.id = m.team2_id
+     LEFT JOIN courts co ON co.id = m.court_id
+     WHERE m.tournament_id = ?
+     ORDER BY m.stage ASC, m.round ASC, m.match_number ASC`
+  )
+    .bind(tournamentId)
+    .all();
+  return c.json({ ok: true, matches: results });
 });
 
 // Final winner/runner-up per tier, derived from each tier's last (final) Round 3/4 match.

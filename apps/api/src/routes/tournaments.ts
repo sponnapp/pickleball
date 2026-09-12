@@ -6,9 +6,14 @@ import { computePoolStandings, computeTierStandings } from '../standings';
 export const tournamentRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 tournamentRoutes.get('/', async (c) => {
-  const { results } = await c.env.DB.prepare(
-    'SELECT id, name, description, format, status, start_date, end_date FROM tournaments ORDER BY start_date DESC'
-  ).all();
+  const user = c.get('user');
+  const isAdminOrSuperuser = user && ['admin', 'superuser', 'organizer'].includes(user.role);
+
+  const query = isAdminOrSuperuser
+    ? 'SELECT id, name, description, format, status, start_date, end_date FROM tournaments ORDER BY start_date DESC'
+    : "SELECT id, name, description, format, status, start_date, end_date FROM tournaments WHERE status != 'draft' ORDER BY start_date DESC";
+
+  const { results } = await c.env.DB.prepare(query).all();
   return c.json({ tournaments: results });
 });
 
@@ -35,8 +40,15 @@ tournamentRoutes.get('/admin', requireAdmin, async (c) => {
 
 tournamentRoutes.get('/:id', async (c) => {
   const id = c.req.param('id');
-  const tournament = await c.env.DB.prepare('SELECT * FROM tournaments WHERE id = ?').bind(id).first();
+  const tournament = await c.env.DB.prepare('SELECT * FROM tournaments WHERE id = ?').bind(id).first<{ status: string; [key: string]: unknown }>();
   if (!tournament) return c.json({ error: 'Tournament not found' }, 404);
+
+  const user = c.get('user');
+  const isAdminOrSuperuser = user && ['admin', 'superuser', 'organizer'].includes(user.role);
+  if (tournament.status === 'draft' && !isAdminOrSuperuser) {
+    return c.json({ error: 'Tournament not found' }, 404);
+  }
+
   return c.json({ tournament });
 });
 
