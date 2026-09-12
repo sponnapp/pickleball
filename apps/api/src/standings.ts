@@ -88,7 +88,10 @@ export async function computePoolStandings(db: Env['DB'], tournamentId: string |
     .filter((r) => r.pool !== null)
     .sort(
       (a, b) =>
-        (a.pool ?? '').localeCompare(b.pool ?? '') || b.wins - a.wins || b.pointDifferential - a.pointDifferential
+        (a.pool ?? '').localeCompare(b.pool ?? '') ||
+        b.wins - a.wins ||
+        b.pointDifferential - a.pointDifferential ||
+        a.teamName.localeCompare(b.teamName)
     );
 }
 
@@ -97,19 +100,39 @@ export async function computeOverallRanking(db: Env['DB'], tournamentId: string 
   const rows = await computeTeamStats(db, tournamentId, 1);
   return rows
     .filter((r) => r.pool !== null)
-    .sort((a, b) => b.wins - a.wins || b.pointDifferential - a.pointDifferential);
+    .sort(
+      (a, b) =>
+        b.wins - a.wins ||
+        b.pointDifferential - a.pointDifferential ||
+        a.teamName.localeCompare(b.teamName)
+    );
 }
 
-// Splits an overall ranking into `tierCount` equal-ish tiers: Platinum, Gold, Silver, Bronze.
-export function assignTiers(ranking: StandingRow[], tierCount: number = 4): Record<number, Tier> {
+// Splits an overall ranking into `tierCount` tiers (with optional `teamsPerTier` teams per tier).
+// Teams that do not fit into the tiers remain unassigned (tier = NULL / eliminated).
+export function assignTiers(
+  ranking: StandingRow[],
+  tierCount: number = 4,
+  teamsPerTier?: number
+): Record<number, Tier> {
   const allTiers: Tier[] = ['platinum', 'gold', 'silver', 'bronze'];
   const count = Math.max(1, Math.min(4, tierCount));
   const activeTiers = allTiers.slice(0, count);
   const n = ranking.length;
   const result: Record<number, Tier> = {};
-  ranking.forEach((r, i) => {
-    result[r.teamId] = activeTiers[Math.min(count - 1, Math.floor((i * count) / Math.max(n, 1)))];
-  });
+
+  if (teamsPerTier && teamsPerTier > 0) {
+    ranking.forEach((r, i) => {
+      const tierIndex = Math.floor(i / teamsPerTier);
+      if (tierIndex < count) {
+        result[r.teamId] = activeTiers[tierIndex];
+      }
+    });
+  } else {
+    ranking.forEach((r, i) => {
+      result[r.teamId] = activeTiers[Math.min(count - 1, Math.floor((i * count) / Math.max(n, 1)))];
+    });
+  }
   return result;
 }
 
@@ -121,15 +144,34 @@ const TIER_ORDER: Record<string, number> = {
 };
 
 // Round 2 standings: grouped and sorted by tier (Platinum -> Gold -> Silver -> Bronze),
-// from the tier round-robin matches. Only includes teams that have been assigned to a tier.
+// from the tier round-robin matches. Uses Stage 1 (Round 1) wins and point differential
+// as secondary tiebreakers so teams start ranked by their Round 1 qualification.
 export async function computeTierStandings(db: Env['DB'], tournamentId: string | number): Promise<StandingRow[]> {
-  const rows = await computeTeamStats(db, tournamentId, 2);
-  return rows
+  const stage2Rows = await computeTeamStats(db, tournamentId, 2);
+  const stage1Rows = await computeTeamStats(db, tournamentId, 1);
+  const stage1Map = new Map(stage1Rows.map((r) => [r.teamId, r]));
+
+  return stage2Rows
     .filter((r) => r.tier !== null)
-    .sort(
-      (a, b) =>
-        (TIER_ORDER[a.tier ?? ''] ?? 99) - (TIER_ORDER[b.tier ?? ''] ?? 99) ||
-        b.wins - a.wins ||
-        b.pointDifferential - a.pointDifferential
-    );
+    .sort((a, b) => {
+      const tierDiff = (TIER_ORDER[a.tier ?? ''] ?? 99) - (TIER_ORDER[b.tier ?? ''] ?? 99);
+      if (tierDiff !== 0) return tierDiff;
+
+      const winsDiff = b.wins - a.wins;
+      if (winsDiff !== 0) return winsDiff;
+
+      const ptDiff = b.pointDifferential - a.pointDifferential;
+      if (ptDiff !== 0) return ptDiff;
+
+      // Tiebreaker from Round 1 (Stage 1) performance
+      const s1A = stage1Map.get(a.teamId);
+      const s1B = stage1Map.get(b.teamId);
+      const s1WinsDiff = (s1B?.wins ?? 0) - (s1A?.wins ?? 0);
+      if (s1WinsDiff !== 0) return s1WinsDiff;
+
+      const s1PtDiff = (s1B?.pointDifferential ?? 0) - (s1A?.pointDifferential ?? 0);
+      if (s1PtDiff !== 0) return s1PtDiff;
+
+      return a.teamName.localeCompare(b.teamName);
+    });
 }

@@ -83,6 +83,21 @@ teamRoutes.patch('/teams/:id', requireAdmin, requireTournamentManager((c) => res
 
 teamRoutes.delete('/teams/:id', requireAdmin, requireTournamentManager((c) => resolveTeamTournamentId(c.env.DB, c.req.param('id'))), async (c) => {
   const id = c.req.param('id');
+  // Delete all matches involving this team (whether team1, team2, or winner)
+  await c.env.DB.prepare(
+    'DELETE FROM matches WHERE team1_id = ? OR team2_id = ? OR winner_id = ?'
+  )
+    .bind(id, id, id)
+    .run();
+
   await c.env.DB.prepare('DELETE FROM teams WHERE id = ?').bind(id).run();
+  return c.json({ ok: true });
+});
+
+teamRoutes.delete('/tournaments/:tournamentId/teams', requireAdmin, requireTournamentManager(async (c) => c.req.param('tournamentId')), async (c) => {
+  const tournamentId = c.req.param('tournamentId');
+  // Delete all matches for this tournament since all teams are being deleted
+  await c.env.DB.prepare('DELETE FROM matches WHERE tournament_id = ?').bind(tournamentId).run();
+  await c.env.DB.prepare('DELETE FROM teams WHERE tournament_id = ?').bind(tournamentId).run();
   return c.json({ ok: true });
 });

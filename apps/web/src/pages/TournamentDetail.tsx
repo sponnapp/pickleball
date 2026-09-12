@@ -44,11 +44,28 @@ interface Standing {
   pointDifferential: number;
   tier: 'platinum' | 'gold' | 'silver' | 'bronze' | null;
 }
+interface PlayoffMatch {
+  id: number;
+  round: number;
+  matchNumber: number;
+  roundLabel: string;
+  isFinal: boolean;
+  isSemi: boolean;
+  isQuarter?: boolean;
+  team1Name: string | null;
+  team2Name: string | null;
+  winnerName: string | null;
+  loserName: string | null;
+  score: string;
+  status: string;
+}
+
 interface TierResult {
   tier: string;
   completed: boolean;
   winner: string | null;
   runnerUp: string | null;
+  matches?: PlayoffMatch[];
 }
 
 const TIER_ORDER: ('platinum' | 'gold' | 'silver' | 'bronze')[] = ['platinum', 'gold', 'silver', 'bronze'];
@@ -83,6 +100,91 @@ function formatMatchTime(scheduledTime: string | null): string | null {
   const period = h >= 12 ? 'PM' : 'AM';
   const hour12 = ((h + 11) % 12) + 1;
   return `${hour12}:${mStr} ${period}`;
+}
+
+interface TournamentWinner {
+  label: string;
+  winner: string;
+  runnerUp?: string | null;
+  tier?: string;
+}
+
+function getTournamentWinners(
+  tournament: Tournament,
+  tierResults: TierResult[],
+  matches: Match[],
+  standings: Standing[]
+): TournamentWinner[] {
+  const winners: TournamentWinner[] = [];
+
+  // 1. Stage 3 Playoff Tier Results
+  const completedTiers = tierResults.filter((t) => t.completed && t.winner);
+  if (completedTiers.length > 0) {
+    const tierOrder: Record<string, number> = { platinum: 1, gold: 2, silver: 3, bronze: 4 };
+    const sortedTiers = [...completedTiers].sort(
+      (a, b) => (tierOrder[a.tier] ?? 99) - (tierOrder[b.tier] ?? 99)
+    );
+
+    for (const t of sortedTiers) {
+      const tierTitle = t.tier.charAt(0).toUpperCase() + t.tier.slice(1);
+      const label =
+        completedTiers.length === 1 && t.tier === 'platinum'
+          ? 'Tournament Champion'
+          : `${tierTitle} Champion`;
+      winners.push({
+        label,
+        winner: t.winner!,
+        runnerUp: t.runnerUp,
+        tier: t.tier,
+      });
+    }
+    return winners;
+  }
+
+  // 2. Bracket Final Matches (Single / Double Elimination / Main Brackets)
+  if (matches.length > 0) {
+    const maxStage = Math.max(...matches.map((m) => m.stage));
+    const stageMatches = matches.filter((m) => m.stage === maxStage);
+    const maxRound = Math.max(...stageMatches.map((m) => m.round));
+    const finalMatches = stageMatches.filter(
+      (m) => m.round === maxRound && m.status === 'completed' && m.winner_id
+    );
+
+    if (finalMatches.length > 0) {
+      for (const m of finalMatches) {
+        const winnerName = m.winner_id === m.team1_id ? m.team1_name : m.team2_name;
+        const runnerUpName = m.winner_id === m.team1_id ? m.team2_name : m.team1_name;
+        if (winnerName) {
+          const bracketLabel =
+            m.bracket_type === 'main' || m.bracket_type === 'winners'
+              ? 'Tournament Champion'
+              : `${m.bracket_type.toUpperCase()} Champion`;
+          winners.push({
+            label: bracketLabel,
+            winner: winnerName,
+            runnerUp: runnerUpName,
+            tier: m.bracket_type,
+          });
+        }
+      }
+      if (winners.length > 0) return winners;
+    }
+  }
+
+  // 3. Pure Round Robin
+  if (tournament.format === 'round_robin' && standings.length > 0) {
+    const allMatchesCompleted =
+      matches.length > 0 && matches.every((m) => m.status === 'completed');
+    if (tournament.status === 'completed' || allMatchesCompleted) {
+      winners.push({
+        label: 'Tournament Champion',
+        winner: standings[0].teamName,
+        runnerUp: standings[1]?.teamName,
+      });
+    }
+  }
+
+  return winners;
 }
 
 export function TournamentDetail() {
@@ -149,18 +251,50 @@ export function TournamentDetail() {
 
   if (!tournament) return <p>Loading...</p>;
 
+  const winners = getTournamentWinners(tournament, tierResults, matches, standings);
+
   return (
     <div className="card">
-      <h1>{tournament.name}</h1>
-      <p>{tournament.description}</p>
-      <p>
-        <span className="tag">{tournament.format.replace('_', ' ')}</span>{' '}
-        <span className="tag">{tournament.status.replace('_', ' ')}</span>
-      </p>
-      {user && (user.role === 'admin' || user.role === 'organizer') && (
-        <Link to={`/admin/tournaments/${id}`} className="button">
-          Manage tournament
-        </Link>
+      <div className="tournament-header-row">
+        <div>
+          <h1>{tournament.name}</h1>
+          {tournament.description && <p>{tournament.description}</p>}
+          <p>
+            <span className="tag">{tournament.format.replace('_', ' ')}</span>{' '}
+            <span className="tag">{tournament.status.replace('_', ' ')}</span>
+          </p>
+        </div>
+        {user && (user.role === 'admin' || user.role === 'organizer') && (
+          <Link to={`/admin/tournaments/${id}`} className="button">
+            Manage tournament
+          </Link>
+        )}
+      </div>
+
+      {winners.length > 0 && (
+        <div className="tournament-winner-banner">
+          <div className="tournament-winner-banner__header">
+            <span className="tournament-winner-banner__icon">🏆</span>
+            <div>
+              <h3>Tournament Champions</h3>
+              <p>Final podium and champions</p>
+            </div>
+          </div>
+          <div className="tournament-winner-banner__grid">
+            {winners.map((w, idx) => (
+              <div key={idx} className="winner-card">
+                {w.tier && ['platinum', 'gold', 'silver', 'bronze'].includes(w.tier) && (
+                  <span className={`tier-badge tier-badge--${w.tier}`} style={{ alignSelf: 'flex-start' }}>
+                    {w.tier}
+                  </span>
+                )}
+                <div className="winner-card__label">{w.label}</div>
+                <div className="winner-card__name">🥇 {w.winner}</div>
+                {w.runnerUp && <div className="winner-card__runner">🥈 {w.runnerUp}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
       )}
 
       <nav className="tab-nav">
@@ -331,28 +465,121 @@ export function TournamentDetail() {
 
       {(view === 'all' || view === 'standings') && tierResults.length > 0 && (
         <>
-          <h2>Round 3 &amp; 4 — Results (Winners &amp; Runners-up)</h2>
+          <h2>Round 3 &amp; 4 — Playoff Results</h2>
           <div className="table-container">
-            <table className="table">
+            <table className="table table--wide">
               <thead>
                 <tr>
                   <th>Tier</th>
-                  <th>Winner (1st)</th>
-                  <th>Runner-up (2nd)</th>
+                  <th>Round</th>
+                  <th>Matchup</th>
+                  <th>Winner / Result</th>
+                  <th>Score</th>
+                  <th>Status</th>
                 </tr>
               </thead>
               <tbody>
                 {TIER_ORDER.filter((tier) => tierResults.some((r) => r.tier === tier)).map((tier) => {
                   const r = tierResults.find((x) => x.tier === tier)!;
-                  return (
-                    <tr key={r.tier}>
+                  const tierMatches = r.matches && r.matches.length > 0 ? r.matches : null;
+
+                  if (!tierMatches) {
+                    return (
+                      <tr key={r.tier}>
+                        <td>
+                          <span className={`tier-badge tier-badge--${r.tier}`}>{r.tier}</span>
+                        </td>
+                        <td>
+                          <span className="tag tag--final">Final</span>
+                        </td>
+                        <td>TBD vs TBD</td>
+                        <td>
+                          {r.completed ? (
+                            <div>
+                              <strong>🥇 {r.winner}</strong> (1st)
+                              {r.runnerUp && (
+                                <div style={{ fontSize: '0.88em', opacity: 0.85, marginTop: '2px' }}>
+                                  🥈 {r.runnerUp} (2nd)
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <span style={{ opacity: 0.6 }}>TBD</span>
+                          )}
+                        </td>
+                        <td>-</td>
+                        <td>
+                          <span className={`tag ${r.completed ? '' : 'tag--outline'}`}>
+                            {r.completed ? 'Final' : 'Scheduled'}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  }
+
+                  return tierMatches.map((m, idx) => (
+                    <tr
+                      key={`${r.tier}-${m.id || idx}`}
+                      className={m.isFinal ? 'playoff-final-row' : m.isSemi ? 'playoff-semi-row' : ''}
+                    >
+                      {idx === 0 ? (
+                        <td rowSpan={tierMatches.length} style={{ verticalAlign: 'top', paddingTop: '0.8rem' }}>
+                          <span className={`tier-badge tier-badge--${r.tier}`}>{r.tier}</span>
+                        </td>
+                      ) : null}
                       <td>
-                        <span className={`tier-badge tier-badge--${r.tier}`}>{r.tier}</span>
+                        <span className={`tag ${m.isFinal ? 'tag--final' : m.isSemi ? 'tag--semi' : ''}`}>
+                          {m.roundLabel}
+                        </span>
                       </td>
-                      <td>{r.completed ? r.winner : 'TBD'}</td>
-                      <td>{r.completed ? r.runnerUp : 'TBD'}</td>
+                      <td>
+                        <strong>{m.team1Name || 'TBD'}</strong>{' '}
+                        <span style={{ opacity: 0.5, padding: '0 2px' }}>vs</span>{' '}
+                        <strong>{m.team2Name || 'TBD'}</strong>
+                      </td>
+                      <td>
+                        {m.status === 'completed' && m.winnerName ? (
+                          m.isFinal ? (
+                            <div>
+                              <strong style={{ color: '#146c43' }}>🥇 {m.winnerName}</strong> (1st)
+                              {m.loserName && (
+                                <div style={{ fontSize: '0.88em', color: '#555', marginTop: '2px' }}>
+                                  🥈 {m.loserName} (2nd)
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <div>
+                              <strong style={{ color: '#146c43' }}>✓ {m.winnerName}</strong>
+                              {m.loserName && (
+                                <span style={{ fontSize: '0.85em', color: '#666', marginLeft: '6px' }}>
+                                  (d. {m.loserName})
+                                </span>
+                              )}
+                            </div>
+                          )
+                        ) : (
+                          <span style={{ opacity: 0.6 }}>TBD</span>
+                        )}
+                      </td>
+                      <td>
+                        <span style={{ fontWeight: 600 }}>{m.score || '-'}</span>
+                      </td>
+                      <td>
+                        <span
+                          className={`tag ${
+                            m.status === 'completed'
+                              ? ''
+                              : m.status === 'in_progress'
+                              ? 'tag--live'
+                              : 'tag--outline'
+                          }`}
+                        >
+                          {m.status === 'completed' ? 'Final' : m.status === 'in_progress' ? 'Live' : 'Scheduled'}
+                        </span>
+                      </td>
                     </tr>
-                  );
+                  ));
                 })}
               </tbody>
             </table>

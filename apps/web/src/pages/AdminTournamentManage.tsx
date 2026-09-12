@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api, ApiError } from '../api';
 import { useAuth } from '../context/AuthContext';
@@ -19,6 +20,7 @@ interface Team {
   player2_name: string | null;
   seed: number | null;
   pool: string | null;
+  tier?: string | null;
 }
 interface Court {
   id: number;
@@ -56,6 +58,57 @@ function defaultStartDateTime(startDateStr: string | null | undefined, defaultTi
   return str.slice(0, 16);
 }
 
+function defaultEndDateTime(
+  startDateStr: string | null | undefined,
+  endDateStr: string | null | undefined,
+  defaultTime = '17:00'
+): string {
+  const dateStr = endDateStr || startDateStr;
+  if (!dateStr || !dateStr.trim()) {
+    const today = new Date().toISOString().slice(0, 10);
+    return `${today}T${defaultTime}`;
+  }
+  const str = dateStr.trim();
+  if (str.length === 10) {
+    return `${str}T${defaultTime}`;
+  }
+  if (str.includes(' ') && !str.includes('T')) {
+    return str.replace(' ', 'T').slice(0, 16);
+  }
+  return str.slice(0, 16);
+}
+
+function getEarliestMatchTime(matches: Match[], stage: number): string | null {
+  const stageMatches = matches.filter((m) => m.stage === stage && m.scheduled_time);
+  if (stageMatches.length === 0) return null;
+  let minTime = stageMatches[0].scheduled_time!;
+  for (const m of stageMatches) {
+    if (m.scheduled_time! < minTime) {
+      minTime = m.scheduled_time!;
+    }
+  }
+  return minTime.slice(0, 16);
+}
+
+function resolveRoundStartTime(
+  matches: Match[],
+  stage: number,
+  storageKey: string,
+  defaultDT: string
+): string {
+  const matchTime = getEarliestMatchTime(matches, stage);
+  if (matchTime) return matchTime;
+  const saved = localStorage.getItem(storageKey);
+  if (saved) return saved;
+  return defaultDT;
+}
+
+function resolveRoundEndTime(storageKey: string, defaultDT: string): string {
+  const saved = localStorage.getItem(storageKey);
+  if (saved) return saved;
+  return defaultDT;
+}
+
 export function AdminTournamentManage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -77,16 +130,22 @@ export function AdminTournamentManage() {
   const [editEndDate, setEditEndDate] = useState('');
   const [groupCount, setGroupCount] = useState(4);
   const [tierCount, setTierCount] = useState(4);
+  const [teamsPerTier, setTeamsPerTier] = useState<number | ''>('');
   const [topCount, setTopCount] = useState(4);
   const [error, setError] = useState<string | null>(null);
 
-  // Round start times
+  // Fancy Pop-up notification state
+  const [popup, setPopup] = useState<{ type: 'success' | 'error'; title: string; message: string } | null>(null);
+
+  // Round start & end times
   const [r1StartTime, setR1StartTime] = useState('');
+  const [r1EndTime, setR1EndTime] = useState('');
   const [r2StartTime, setR2StartTime] = useState('');
+  const [r2EndTime, setR2EndTime] = useState('');
   const [r3StartTime, setR3StartTime] = useState('');
+  const [r3EndTime, setR3EndTime] = useState('');
   const [bracketStartTime, setBracketStartTime] = useState('');
-  const [autoStartTime, setAutoStartTime] = useState('');
-  const [autoStage, setAutoStage] = useState<number>(0);
+  const [bracketEndTime, setBracketEndTime] = useState('');
 
   // CSV team import
   const [csvError, setCsvError] = useState<string | null>(null);
@@ -101,27 +160,87 @@ export function AdminTournamentManage() {
   const [filterTeam, setFilterTeam] = useState<string>('all');
 
   const load = () => {
-    api.get<{ tournament: Tournament }>(`/api/tournaments/${id}`).then((r) => {
-      setTournament(r.tournament);
-      setEditName(r.tournament.name);
-      setEditDescription(r.tournament.description ?? '');
-      setEditFormat(r.tournament.format);
-      setEditStatus(r.tournament.status);
-      setEditStartDate(r.tournament.start_date ?? '');
-      setEditEndDate(r.tournament.end_date ?? '');
+    Promise.all([
+      api.get<{ tournament: Tournament }>(`/api/tournaments/${id}`),
+      api.get<{ teams: Team[] }>(`/api/tournaments/${id}/teams`),
+      api.get<{ courts: Court[] }>(`/api/tournaments/${id}/courts`),
+      api.get<{ matches: Match[] }>(`/api/tournaments/${id}/matches`),
+    ]).then(([tourRes, teamsRes, courtsRes, matchesRes]) => {
+      const tour = tourRes.tournament;
+      setTournament(tour);
+      setEditName(tour.name);
+      setEditDescription(tour.description ?? '');
+      setEditFormat(tour.format);
+      setEditStatus(tour.status);
+      setEditStartDate(tour.start_date ?? '');
+      setEditEndDate(tour.end_date ?? '');
+      setTeams(teamsRes.teams);
+      setCourts(courtsRes.courts);
+      setMatches(matchesRes.matches);
 
-      const defaultDT = defaultStartDateTime(r.tournament.start_date);
-      setR1StartTime((prev) => prev || defaultDT);
-      setR2StartTime((prev) => prev || defaultDT);
-      setR3StartTime((prev) => prev || defaultDT);
-      setBracketStartTime((prev) => prev || defaultDT);
-      setAutoStartTime((prev) => prev || defaultDT);
+      const mList = matchesRes.matches;
+      const tList = teamsRes.teams;
+
+      // Deduce existing group count from teams pool or fallback to saved / default (4)
+      const existingPools = new Set(tList.map((t) => t.pool).filter(Boolean));
+      if (existingPools.size >= 2) {
+        setGroupCount(existingPools.size);
+      } else {
+        const savedGroupCount = localStorage.getItem(`azts_group_count_${id}`);
+        if (savedGroupCount) setGroupCount(Number(savedGroupCount));
+      }
+
+      // Deduce existing tier count from teams tier or fallback to saved / default (4)
+      const existingTiers = new Set(tList.map((t) => t.tier).filter(Boolean));
+      if (existingTiers.size >= 1) {
+        setTierCount(existingTiers.size);
+        const platinumCount = tList.filter((t) => t.tier === 'platinum').length;
+        if (platinumCount > 0) {
+          setTeamsPerTier(platinumCount);
+        }
+      } else {
+        const savedTierCount = localStorage.getItem(`azts_tier_count_${id}`);
+        if (savedTierCount) setTierCount(Number(savedTierCount));
+        const savedTeamsPerTier = localStorage.getItem(`azts_teams_per_tier_${id}`);
+        if (savedTeamsPerTier) setTeamsPerTier(Number(savedTeamsPerTier));
+      }
+
+      const savedTopCount = localStorage.getItem(`azts_top_count_${id}`);
+      if (savedTopCount) setTopCount(Number(savedTopCount));
+
+      const defaultStartDT = defaultStartDateTime(tour.start_date);
+      const defaultEndDT = defaultEndDateTime(tour.start_date, tour.end_date);
+
+      const r1StartVal = resolveRoundStartTime(mList, 1, `azts_r1_start_${id}`, defaultStartDT);
+      const r1EndVal = resolveRoundEndTime(`azts_r1_end_${id}`, defaultEndDT);
+
+      const r2StartVal = resolveRoundStartTime(mList, 2, `azts_r2_start_${id}`, defaultStartDT);
+      const r2EndVal = resolveRoundEndTime(`azts_r2_end_${id}`, defaultEndDT);
+
+      const r3StartVal = resolveRoundStartTime(mList, 3, `azts_r3_start_${id}`, defaultStartDT);
+      const r3EndVal = resolveRoundEndTime(`azts_r3_end_${id}`, defaultEndDT);
+
+      const bracketStartVal = resolveRoundStartTime(mList, 1, `azts_bracket_start_${id}`, defaultStartDT);
+      const bracketEndVal = resolveRoundEndTime(`azts_bracket_end_${id}`, defaultEndDT);
+
+      setR1StartTime(r1StartVal);
+      setR1EndTime(r1EndVal);
+      setR2StartTime(r2StartVal);
+      setR2EndTime(r2EndVal);
+      setR3StartTime(r3StartVal);
+      setR3EndTime(r3EndVal);
+      setBracketStartTime(bracketStartVal);
+      setBracketEndTime(bracketEndVal);
     });
-    api.get<{ teams: Team[] }>(`/api/tournaments/${id}/teams`).then((r) => setTeams(r.teams));
-    api.get<{ courts: Court[] }>(`/api/tournaments/${id}/courts`).then((r) => setCourts(r.courts));
-    api.get<{ matches: Match[] }>(`/api/tournaments/${id}/matches`).then((r) => setMatches(r.matches));
   };
   useEffect(load, [id]);
+
+  // Auto-dismiss notification popup after 5 seconds
+  useEffect(() => {
+    if (!popup) return;
+    const timer = setTimeout(() => setPopup(null), 5000);
+    return () => clearTimeout(timer);
+  }, [popup]);
 
   // Superusers may only manage tournaments they're assigned to; verify against the admin-scoped list.
   useEffect(() => {
@@ -131,13 +250,29 @@ export function AdminTournamentManage() {
       .then((r) => setAccessDenied(!r.tournaments.some((t) => String(t.id) === id)));
   }, [user, id]);
 
-  const runAction = async (fn: () => Promise<unknown>) => {
+  const runAction = async (
+    fn: () => Promise<unknown>,
+    options?: { successMsg?: string; title?: string }
+  ) => {
     setError(null);
     try {
       await fn();
       load();
+      if (options?.successMsg) {
+        setPopup({
+          type: 'success',
+          title: options.title || 'Success!',
+          message: options.successMsg,
+        });
+      }
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Action failed');
+      const errMsg = err instanceof ApiError ? err.message : (err instanceof Error ? err.message : 'Action failed');
+      setError(errMsg);
+      setPopup({
+        type: 'error',
+        title: options?.title ? `${options.title} Failed` : 'Action Failed',
+        message: errMsg,
+      });
     }
   };
 
@@ -218,12 +353,40 @@ export function AdminTournamentManage() {
       if (parsed.length === 0) throw new Error('No valid team rows found (name and player1_name are required)');
       setCsvTeams(parsed);
     } catch (err) {
-      setCsvError(err instanceof Error ? err.message : 'Failed to parse CSV');
+      const msg = err instanceof Error ? err.message : 'Failed to parse CSV';
+      setCsvError(msg);
+      setPopup({
+        type: 'error',
+        title: 'CSV Parsing Failed',
+        message: msg,
+      });
     }
   };
 
   const importCsvTeams = () => {
-    runAction(() => api.post(`/api/tournaments/${id}/teams/bulk`, { teams: csvTeams })).then(() => setCsvTeams([]));
+    const count = csvTeams.length;
+    runAction(
+      () => api.post(`/api/tournaments/${id}/teams/bulk`, { teams: csvTeams }),
+      {
+        successMsg: `Successfully imported ${count} team${count === 1 ? '' : 's'} into the tournament.`,
+        title: 'Teams Imported',
+      }
+    ).then(() => setCsvTeams([]));
+  };
+
+  const deleteAllTeams = () => {
+    if (teams.length === 0) return;
+    if (!window.confirm(`Are you sure you want to delete ALL ${teams.length} teams? This action cannot be undone.`)) {
+      return;
+    }
+    const count = teams.length;
+    runAction(
+      () => api.delete(`/api/tournaments/${id}/teams`),
+      {
+        successMsg: `Successfully deleted all ${count} team${count === 1 ? '' : 's'}.`,
+        title: 'All Teams Deleted',
+      }
+    );
   };
 
   if (!tournament) return <p>Loading...</p>;
@@ -289,7 +452,7 @@ export function AdminTournamentManage() {
         </section>
 
         <section style={{ marginBottom: 0 }}>
-          <h2>Courts &amp; Scheduling</h2>
+          <h2>Courts</h2>
           <ul className="list">
             {courts.map((c) => (
               <li key={c.id}>
@@ -309,52 +472,23 @@ export function AdminTournamentManage() {
             <input placeholder="Court name" value={courtName} onChange={(e) => setCourtName(e.target.value)} required />
             <button type="submit">Add court</button>
           </form>
-
-          <div style={{ marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid rgba(0,0,0,0.1)' }}>
-            <h3>Auto-Schedule Courts &amp; Times</h3>
-            <p style={{ fontSize: '0.88rem', color: '#555', marginBottom: '0.75rem' }}>
-              Assigns matches to available courts in 20-minute slots starting from your chosen start time.
-            </p>
-            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
-              <label>
-                Round Start Time
-                <input
-                  type="datetime-local"
-                  value={autoStartTime}
-                  onChange={(e) => setAutoStartTime(e.target.value)}
-                  required
-                />
-              </label>
-              <label>
-                Stage / Round
-                <select value={autoStage} onChange={(e) => setAutoStage(Number(e.target.value))}>
-                  <option value={0}>All Rounds</option>
-                  <option value={1}>Round 1 (Groups)</option>
-                  <option value={2}>Round 2 (Tiers)</option>
-                  <option value={3}>Round 3 (Playoffs)</option>
-                </select>
-              </label>
-              <button
-                type="button"
-                className="button button--outline"
-                onClick={() =>
-                  runAction(() =>
-                    api.post(`/api/tournaments/${id}/auto-schedule`, {
-                      startTime: autoStartTime,
-                      stage: autoStage || undefined,
-                    })
-                  )
-                }
-              >
-                Auto-schedule
-              </button>
-            </div>
-          </div>
         </section>
       </div>
 
       <section>
-        <h2>Teams ({teams.length})</h2>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', marginBottom: '12px' }}>
+          <h2 style={{ margin: 0 }}>Teams ({teams.length})</h2>
+          {teams.length > 0 && (
+            <button
+              type="button"
+              className="button--danger"
+              style={{ margin: 0 }}
+              onClick={deleteAllTeams}
+            >
+              Delete All Teams
+            </button>
+          )}
+        </div>
         <div className="table-container">
           <table className="table">
             <thead>
@@ -485,7 +619,11 @@ export function AdminTournamentManage() {
                 min={2}
                 max={26}
                 value={groupCount}
-                onChange={(e) => setGroupCount(Number(e.target.value))}
+                onChange={(e) => {
+                  const val = Number(e.target.value);
+                  setGroupCount(val);
+                  if (id) localStorage.setItem(`azts_group_count_${id}`, String(val));
+                }}
                 style={{ width: '5rem' }}
               />
             </label>
@@ -494,18 +632,39 @@ export function AdminTournamentManage() {
               <input
                 type="datetime-local"
                 value={r1StartTime}
-                onChange={(e) => setR1StartTime(e.target.value)}
+                onChange={(e) => {
+                  setR1StartTime(e.target.value);
+                  if (id) localStorage.setItem(`azts_r1_start_${id}`, e.target.value);
+                }}
+                required
+              />
+            </label>
+            <label>
+              Round 1 End Time
+              <input
+                type="datetime-local"
+                value={r1EndTime}
+                onChange={(e) => {
+                  setR1EndTime(e.target.value);
+                  if (id) localStorage.setItem(`azts_r1_end_${id}`, e.target.value);
+                }}
                 required
               />
             </label>
           </div>
           <button
             onClick={() =>
-              runAction(() =>
-                api.post(`/api/tournaments/${id}/round1/generate-groups`, {
-                  groupCount,
-                  startTime: r1StartTime,
-                })
+              runAction(
+                () =>
+                  api.post(`/api/tournaments/${id}/round1/generate-groups`, {
+                    groupCount,
+                    startTime: r1StartTime,
+                    endTime: r1EndTime,
+                  }),
+                {
+                  successMsg: `Round 1 groups generated successfully! Created ${groupCount} groups and scheduled match times.`,
+                  title: 'Generate Round 1 Groups',
+                }
               )
             }
           >
@@ -516,13 +675,20 @@ export function AdminTournamentManage() {
         <section>
           <h2>Round 2 — Tier Assignment</h2>
           <p>
-            Ranks all teams overall from Round 1 results and splits them into your chosen number of tiers,
-            generating a round-robin schedule within each tier.
+            Ranks all teams overall from Round 1 results and splits them into your chosen number of tiers
+            (teams that do not fit into these tiers will be eliminated).
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1rem' }}>
             <label>
               Number of tier groups
-              <select value={tierCount} onChange={(e) => setTierCount(Number(e.target.value))}>
+              <select
+                value={tierCount}
+                onChange={(e) => {
+                  const val = Number(e.target.value);
+                  setTierCount(val);
+                  if (id) localStorage.setItem(`azts_tier_count_${id}`, String(val));
+                }}
+              >
                 <option value={4}>4 Tiers (Platinum, Gold, Silver, Bronze)</option>
                 <option value={3}>3 Tiers (Platinum, Gold, Silver)</option>
                 <option value={2}>2 Tiers (Platinum, Gold)</option>
@@ -530,22 +696,76 @@ export function AdminTournamentManage() {
               </select>
             </label>
             <label>
+              Number of teams per tier
+              <input
+                type="number"
+                min={2}
+                max={50}
+                value={teamsPerTier}
+                placeholder="All teams (or enter e.g. 6)"
+                onChange={(e) => {
+                  const val = e.target.value === '' ? '' : Number(e.target.value);
+                  setTeamsPerTier(val);
+                  if (id) {
+                    if (val === '') localStorage.removeItem(`azts_teams_per_tier_${id}`);
+                    else localStorage.setItem(`azts_teams_per_tier_${id}`, String(val));
+                  }
+                }}
+                style={{ width: '100%' }}
+              />
+            </label>
+            <label>
               Round 2 Start Time
               <input
                 type="datetime-local"
                 value={r2StartTime}
-                onChange={(e) => setR2StartTime(e.target.value)}
+                onChange={(e) => {
+                  setR2StartTime(e.target.value);
+                  if (id) localStorage.setItem(`azts_r2_start_${id}`, e.target.value);
+                }}
+                required
+              />
+            </label>
+            <label>
+              Round 2 End Time
+              <input
+                type="datetime-local"
+                value={r2EndTime}
+                onChange={(e) => {
+                  setR2EndTime(e.target.value);
+                  if (id) localStorage.setItem(`azts_r2_end_${id}`, e.target.value);
+                }}
                 required
               />
             </label>
           </div>
           <button
             onClick={() =>
-              runAction(() =>
-                api.post(`/api/tournaments/${id}/round2/generate-tiers`, {
-                  tierCount,
-                  startTime: r2StartTime,
-                })
+              runAction(
+                async () => {
+                  const res = await api.post<{
+                    tiers: Record<string, number>;
+                    placedCount?: number;
+                    eliminatedCount?: number;
+                  }>(`/api/tournaments/${id}/round2/generate-tiers`, {
+                    tierCount,
+                    teamsPerTier: teamsPerTier !== '' ? Number(teamsPerTier) : undefined,
+                    startTime: r2StartTime,
+                    endTime: r2EndTime,
+                  });
+                  const placed = res.placedCount ?? Object.values(res.tiers || {}).reduce((a, b) => a + b, 0);
+                  const eliminated = res.eliminatedCount ?? 0;
+                  let msg = `Round 2 tiers generated successfully! Placed ${placed} team${placed === 1 ? '' : 's'} into ${tierCount} tier group${tierCount === 1 ? '' : 's'}.`;
+                  if (eliminated > 0) {
+                    msg += ` (${eliminated} team${eliminated === 1 ? '' : 's'} eliminated)`;
+                  }
+                  setPopup({
+                    type: 'success',
+                    title: 'Generate Round 2 Tiers',
+                    message: msg,
+                  });
+                  return res;
+                }
               )
             }
           >
@@ -561,7 +781,14 @@ export function AdminTournamentManage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1rem' }}>
             <label>
               Qualifying teams per tier
-              <select value={topCount} onChange={(e) => setTopCount(Number(e.target.value))}>
+              <select
+                value={topCount}
+                onChange={(e) => {
+                  const val = Number(e.target.value);
+                  setTopCount(val);
+                  if (id) localStorage.setItem(`azts_top_count_${id}`, String(val));
+                }}
+              >
                 <option value={4}>Top 4 (Semifinals &amp; Final)</option>
                 <option value={2}>Top 2 (Final only)</option>
                 <option value={8}>Top 8 (Quarterfinals, Semifinals &amp; Final)</option>
@@ -572,18 +799,39 @@ export function AdminTournamentManage() {
               <input
                 type="datetime-local"
                 value={r3StartTime}
-                onChange={(e) => setR3StartTime(e.target.value)}
+                onChange={(e) => {
+                  setR3StartTime(e.target.value);
+                  if (id) localStorage.setItem(`azts_r3_start_${id}`, e.target.value);
+                }}
+                required
+              />
+            </label>
+            <label>
+              Playoffs End Time
+              <input
+                type="datetime-local"
+                value={r3EndTime}
+                onChange={(e) => {
+                  setR3EndTime(e.target.value);
+                  if (id) localStorage.setItem(`azts_r3_end_${id}`, e.target.value);
+                }}
                 required
               />
             </label>
           </div>
           <button
             onClick={() =>
-              runAction(() =>
-                api.post(`/api/tournaments/${id}/round3/generate-knockout`, {
-                  topCount,
-                  startTime: r3StartTime,
-                })
+              runAction(
+                () =>
+                  api.post(`/api/tournaments/${id}/round3/generate-knockout`, {
+                    topCount,
+                    startTime: r3StartTime,
+                    endTime: r3EndTime,
+                  }),
+                {
+                  successMsg: `Playoff knockout bracket generated successfully for top ${topCount} qualifying teams per tier!`,
+                  title: 'Generate Playoffs',
+                }
               )
             }
           >
@@ -595,22 +843,45 @@ export function AdminTournamentManage() {
       {['single_elimination', 'double_elimination', 'round_robin', 'pool_play'].includes(tournament.format) && (
         <section style={{ marginTop: '1rem' }}>
           <h2>Full Bracket Schedule ({tournament.format.replace('_', ' ')})</h2>
-          <p>Generates the initial bracket and schedules matches across courts starting from your selected round start time.</p>
+          <p>Generates the initial bracket and schedules matches across courts within your selected round start &amp; end time window.</p>
           <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
             <label>
               Round Start Time
               <input
                 type="datetime-local"
                 value={bracketStartTime}
-                onChange={(e) => setBracketStartTime(e.target.value)}
+                onChange={(e) => {
+                  setBracketStartTime(e.target.value);
+                  if (id) localStorage.setItem(`azts_bracket_start_${id}`, e.target.value);
+                }}
+                required
+              />
+            </label>
+            <label>
+              Round End Time
+              <input
+                type="datetime-local"
+                value={bracketEndTime}
+                onChange={(e) => {
+                  setBracketEndTime(e.target.value);
+                  if (id) localStorage.setItem(`azts_bracket_end_${id}`, e.target.value);
+                }}
                 required
               />
             </label>
             <button
               type="button"
               onClick={() =>
-                runAction(() =>
-                  api.post(`/api/tournaments/${id}/generate-bracket`, { startTime: bracketStartTime })
+                runAction(
+                  () =>
+                    api.post(`/api/tournaments/${id}/generate-bracket`, {
+                      startTime: bracketStartTime,
+                      endTime: bracketEndTime,
+                    }),
+                  {
+                    successMsg: 'Full tournament bracket generated and court times scheduled successfully!',
+                    title: 'Generate Bracket',
+                  }
                 )
               }
             >
@@ -750,6 +1021,33 @@ export function AdminTournamentManage() {
           );
         })()}
       </section>
+
+      {popup &&
+        createPortal(
+          <div
+            className={`top-toast-card top-toast-card--${popup.type}`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="top-toast-icon-badge">
+              {popup.type === 'success' ? '✓' : '⚠️'}
+            </div>
+            <div className="top-toast-content">
+              <div className="top-toast-header">
+                <span className="top-toast-title">{popup.title}</span>
+                <button
+                  type="button"
+                  className="top-toast-close"
+                  onClick={() => setPopup(null)}
+                  aria-label="Close notification"
+                >
+                  ×
+                </button>
+              </div>
+              <p className="top-toast-message">{popup.message}</p>
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   );
 }
