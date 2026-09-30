@@ -1672,6 +1672,36 @@ button.button--danger:hover,
   margin-top: 12px;
 }
 
+.manual-match-panel {
+  margin: 0 0 14px;
+  padding: 12px;
+  border: 1px solid rgba(23, 53, 44, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 253, 248, 0.7);
+}
+
+.manual-match-panel summary {
+  color: #146c43;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.manual-match-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(130px, 1fr));
+  gap: 10px;
+  align-items: end;
+  margin-top: 12px;
+}
+
+.manual-match-form label {
+  margin: 0;
+}
+
+.manual-match-form button {
+  margin: 0;
+}
+
 .event-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -1925,6 +1955,7 @@ button.button--danger:hover,
   .admin-sponsor-form { grid-template-columns: 1fr; }
   .admin-sponsor-row { align-items: flex-start; flex-wrap: wrap; }
   .admin-sponsor-row small { flex-basis: 100%; order: 3; }
+  .manual-match-form { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 720px) {

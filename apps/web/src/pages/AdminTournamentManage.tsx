@@ -150,6 +150,13 @@ export function AdminTournamentManage() {
   const [r3EndTime, setR3EndTime] = useState('');
   const [bracketStartTime, setBracketStartTime] = useState('');
   const [bracketEndTime, setBracketEndTime] = useState('');
+  const [manualTeam1, setManualTeam1] = useState('');
+  const [manualTeam2, setManualTeam2] = useState('');
+  const [manualStage, setManualStage] = useState(1);
+  const [manualRound, setManualRound] = useState(1);
+  const [manualBracket, setManualBracket] = useState('pool');
+  const [manualCourt, setManualCourt] = useState('');
+  const [manualTime, setManualTime] = useState('');
 
   // CSV team import
   const [csvError, setCsvError] = useState<string | null>(null);
@@ -928,6 +935,76 @@ export function AdminTournamentManage() {
 
       <section>
         <h2>Matches</h2>
+        <details className="manual-match-panel">
+          <summary>Add manual match</summary>
+          <form
+            className="manual-match-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              runAction(
+                () => api.post(`/api/tournaments/${id}/matches`, {
+                  team1_id: Number(manualTeam1),
+                  team2_id: Number(manualTeam2),
+                  stage: manualStage,
+                  round: manualRound,
+                  bracket_type: manualBracket,
+                  court_id: manualCourt ? Number(manualCourt) : null,
+                  scheduled_time: manualTime || undefined,
+                }),
+                { successMsg: 'Manual match added and ready for scoring.', title: 'Add Manual Match' }
+              ).then(() => {
+                setManualTeam1('');
+                setManualTeam2('');
+                setManualCourt('');
+                setManualTime('');
+              });
+            }}
+          >
+            <label>
+              Team 1
+              <select value={manualTeam1} onChange={(e) => setManualTeam1(e.target.value)} required>
+                <option value="">Select team</option>
+                {teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
+              </select>
+            </label>
+            <label>
+              Team 2
+              <select value={manualTeam2} onChange={(e) => setManualTeam2(e.target.value)} required>
+                <option value="">Select team</option>
+                {teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
+              </select>
+            </label>
+            <label>
+              Round
+              <select value={manualStage} onChange={(e) => { const stage = Number(e.target.value); setManualStage(stage); setManualBracket(stage === 1 ? 'pool' : 'main'); }}>
+                <option value={1}>Round 1</option>
+                <option value={2}>Round 2</option>
+                <option value={3}>Round 3</option>
+                <option value={4}>Round 4</option>
+              </select>
+            </label>
+            <label>
+              Bracket / tier
+              <input value={manualBracket} onChange={(e) => setManualBracket(e.target.value)} placeholder="pool, gold, main" required />
+            </label>
+            <label>
+              Bracket round
+              <input type="number" min={1} value={manualRound} onChange={(e) => setManualRound(Number(e.target.value))} />
+            </label>
+            <label>
+              Court
+              <select value={manualCourt} onChange={(e) => setManualCourt(e.target.value)}>
+                <option value="">No court</option>
+                {courts.map((court) => <option key={court.id} value={court.id}>{court.name}</option>)}
+              </select>
+            </label>
+            <label>
+              Scheduled time
+              <input type="datetime-local" value={manualTime} onChange={(e) => setManualTime(e.target.value)} />
+            </label>
+            <button type="submit">Add match</button>
+          </form>
+        </details>
         {(() => {
           const tierSortOrder: Record<string, number> = { pool: 1, platinum: 2, gold: 3, silver: 4, bronze: 5 };
           const sortedMatches = [...matches].sort((a, b) => {

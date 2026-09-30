@@ -253,6 +253,63 @@ matchRoutes.get('/tournaments/:tournamentId/matches', async (c) => {
   return c.json({ matches });
 });
 
+matchRoutes.post('/tournaments/:tournamentId/matches', requireAdmin, requireTournamentManager(async (c) => c.req.param('tournamentId')), async (c) => {
+  const tournamentId = c.req.param('tournamentId')!;
+  const body = await c.req.json<{
+    team1_id?: number;
+    team2_id?: number;
+    stage?: number;
+    bracket_type?: string;
+    round?: number;
+    court_id?: number | null;
+    scheduled_time?: string;
+  }>();
+
+  if (!Number.isInteger(body.team1_id) || !Number.isInteger(body.team2_id) || body.team1_id === body.team2_id) {
+    return c.json({ error: 'Choose two different teams' }, 400);
+  }
+  const stage = Math.max(1, Math.min(4, Math.floor(body.stage ?? 1)));
+  const round = Math.max(1, Math.floor(body.round ?? 1));
+  const bracketType = body.bracket_type?.trim() || (stage === 1 ? 'pool' : 'main');
+  const { results: teams } = await c.env.DB.prepare(
+    'SELECT id FROM teams WHERE tournament_id = ? AND id IN (?, ?)'
+  )
+    .bind(tournamentId, body.team1_id, body.team2_id)
+    .all<{ id: number }>();
+  if (teams.length !== 2) return c.json({ error: 'Both teams must belong to this tournament' }, 400);
+
+  if (body.court_id !== null && body.court_id !== undefined) {
+    const court = await c.env.DB.prepare('SELECT id FROM courts WHERE id = ? AND tournament_id = ?')
+      .bind(body.court_id, tournamentId)
+      .first();
+    if (!court) return c.json({ error: 'Court does not belong to this tournament' }, 400);
+  }
+
+  const nextNumber = await c.env.DB.prepare(
+    'SELECT COALESCE(MAX(match_number), 0) + 1 AS value FROM matches WHERE tournament_id = ? AND stage = ? AND bracket_type = ? AND round = ?'
+  )
+    .bind(tournamentId, stage, bracketType, round)
+    .first<{ value: number }>();
+  const match = await c.env.DB.prepare(
+    `INSERT INTO matches
+       (tournament_id, stage, bracket_type, round, match_number, team1_id, team2_id, court_id, scheduled_time)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`
+  )
+    .bind(
+      tournamentId,
+      stage,
+      bracketType,
+      round,
+      nextNumber?.value ?? 1,
+      body.team1_id,
+      body.team2_id,
+      body.court_id ?? null,
+      body.scheduled_time?.trim() || null
+    )
+    .first();
+  return c.json({ match }, 201);
+});
+
 // Generates the full match schedule for a tournament based on its format.
 // Regeneration is blocked once any match has results, to avoid wiping recorded scores.
 matchRoutes.post('/tournaments/:tournamentId/generate-bracket', requireAdmin, requireTournamentManager(async (c) => c.req.param('tournamentId')), async (c) => {
