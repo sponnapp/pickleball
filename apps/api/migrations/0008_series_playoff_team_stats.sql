@@ -1,0 +1,2 @@
+ALTER TABLE teams ADD COLUMN qualifier_wins INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE teams ADD COLUMN qualifier_point_differential INTEGER NOT NULL DEFAULT 0;

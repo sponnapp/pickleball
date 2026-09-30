@@ -11,6 +11,22 @@ interface Tournament {
   end_date: string | null;
 }
 
+interface Sponsor {
+  id: number;
+  name: string;
+  logo_url: string | null;
+  website_url: string | null;
+}
+
+interface Brochure {
+  id: number;
+  target_type: 'tournament' | 'series';
+  target_id: number;
+  title: string | null;
+  brochure_path: string;
+  target_name: string | null;
+}
+
 function formatDate(value: string | null) {
   if (!value) return 'Date to be announced';
   const date = new Date(`${value.slice(0, 10)}T00:00:00`);
@@ -19,9 +35,16 @@ function formatDate(value: string | null) {
 
 export function Home() {
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
+  const [brochures, setBrochures] = useState<Brochure[]>([]);
+  const [sponsors, setSponsors] = useState<Sponsor[]>([]);
 
   useEffect(() => {
     api.get<{ tournaments: Tournament[] }>('/api/tournaments').then((result) => setTournaments(result.tournaments.slice(0, 3)));
+    api.get<{ brochures: Brochure[]; sponsors: Sponsor[] }>('/api/home-content')
+      .then((result) => {
+        setBrochures(result.brochures);
+        setSponsors(result.sponsors);
+      });
   }, []);
 
   return (
@@ -99,6 +122,39 @@ export function Home() {
           <div className="empty-state">New tournaments are on the way. Check back soon.</div>
         )}
       </section>
+
+      {brochures.map((brochure) => (
+        <section className="home-brochure" key={brochure.id}>
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow eyebrow--dark">{brochure.target_type === 'series' ? 'SERIES BROCHURE' : 'TOURNAMENT BROCHURE'}</p>
+              <h2>{brochure.title || brochure.target_name || 'Tournament details'}</h2>
+            </div>
+            <a className="text-link text-link--dark" href={brochure.brochure_path} target="_blank" rel="noreferrer">
+              Open brochure <span aria-hidden="true">-&gt;</span>
+            </a>
+          </div>
+          <a href={brochure.brochure_path} target="_blank" rel="noreferrer" className="home-brochure__frame">
+            <img src={brochure.brochure_path} alt={brochure.title || brochure.target_name || 'Tournament brochure'} />
+          </a>
+        </section>
+      ))}
+
+      {sponsors.length > 0 && (
+        <section className="home-sponsors" aria-label="Sponsors">
+          <p className="eyebrow eyebrow--dark">COMMUNITY PARTNERS</p>
+          <div className="home-sponsors__grid">
+            {sponsors.map((sponsor) => {
+              const content = sponsor.logo_url ? <img src={sponsor.logo_url} alt={sponsor.name} /> : <strong>{sponsor.name}</strong>;
+              return sponsor.website_url ? (
+                <a key={sponsor.id} href={sponsor.website_url} target="_blank" rel="noreferrer" title={sponsor.name}>{content}</a>
+              ) : (
+                <div key={sponsor.id} title={sponsor.name}>{content}</div>
+              );
+            })}
+          </div>
+        </section>
+      )}
     </div>
   );
 }

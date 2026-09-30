@@ -12,6 +12,8 @@ interface Tournament {
   status: string;
   start_date: string | null;
   end_date: string | null;
+  series_id?: number | null;
+  series_stage?: string | null;
 }
 interface Team {
   id: number;
@@ -32,6 +34,7 @@ interface Match {
   bracket_type: string;
   round: number;
   match_number: number;
+  game_number?: number;
   team1_id: number | null;
   team2_id: number | null;
   team1_name: string | null;
@@ -129,6 +132,7 @@ export function AdminTournamentManage() {
   const [editStartDate, setEditStartDate] = useState('');
   const [editEndDate, setEditEndDate] = useState('');
   const [groupCount, setGroupCount] = useState(4);
+  const [separateTeamIds, setSeparateTeamIds] = useState<number[]>([]);
   const [tierCount, setTierCount] = useState(4);
   const [teamsPerTier, setTeamsPerTier] = useState<number | ''>('');
   const [topCount, setTopCount] = useState(4);
@@ -391,10 +395,12 @@ export function AdminTournamentManage() {
 
   if (!tournament) return <p>Loading...</p>;
   if (accessDenied) return <p className="error">You are not assigned to manage this tournament.</p>;
+  const isSeriesPlayoffs = tournament.series_stage === 'playoffs';
 
   return (
     <div className="card">
-      <h1>Manage: {tournament.name}</h1>
+      <h1>Manage: {tournament.name}{isSeriesPlayoffs ? ' — Playoffs' : ''}</h1>
+      {isSeriesPlayoffs && <p>{teams.length} teams seeded from combined T1 and T2 Round 1 wins and point differential.</p>}
 
       <div className="admin-row">
         <section style={{ marginBottom: 0 }}>
@@ -497,7 +503,7 @@ export function AdminTournamentManage() {
                 <th>Player 1</th>
                 <th>Player 2</th>
                 <th>Seed</th>
-                <th>Pool</th>
+                <th>Group</th>
                 <th></th>
               </tr>
             </thead>
@@ -608,9 +614,9 @@ export function AdminTournamentManage() {
       </section>
 
       <div className="admin-row">
-        <section>
+        {!isSeriesPlayoffs && <section>
           <h2>Round 1 — Random Groups</h2>
-          <p>Randomly splits all teams into even groups and generates a round-robin schedule within each group.</p>
+          <p>Randomly splits teams into balanced groups and generates a round-robin schedule within each group. Choose teams below to spread them across different groups.</p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1rem' }}>
             <label>
               Number of groups
@@ -627,6 +633,29 @@ export function AdminTournamentManage() {
                 style={{ width: '5rem' }}
               />
             </label>
+            <details>
+              <summary>Keep selected teams apart ({separateTeamIds.length} selected)</summary>
+              <div style={{ maxHeight: '12rem', overflowY: 'auto', margin: '0.5rem 0', padding: '0.5rem', border: '1px solid rgba(23, 53, 44, 0.16)', borderRadius: '6px' }}>
+                {teams.map((team) => (
+                  <label key={team.id} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: '0.5rem', margin: '0.35rem 0' }}>
+                    <input
+                      type="checkbox"
+                      checked={separateTeamIds.includes(team.id)}
+                      onChange={(event) => {
+                        setSeparateTeamIds((selected) =>
+                          event.target.checked
+                            ? [...selected, team.id]
+                            : selected.filter((teamId) => teamId !== team.id)
+                        );
+                      }}
+                    />
+                    <span>{team.name}</span>
+                  </label>
+                ))}
+                {teams.length === 0 && <small>Add teams before selecting teams to separate.</small>}
+              </div>
+              <small>Selected teams are assigned across groups first. If there are more selected teams than groups, they cycle evenly across groups.</small>
+            </details>
             <label>
               Round 1 Start Time
               <input
@@ -658,6 +687,7 @@ export function AdminTournamentManage() {
                 () =>
                   api.post(`/api/tournaments/${id}/round1/generate-groups`, {
                     groupCount,
+                    separateTeamIds,
                     startTime: r1StartTime,
                     endTime: r1EndTime,
                   }),
@@ -670,13 +700,14 @@ export function AdminTournamentManage() {
           >
             Generate Round 1 groups
           </button>
-        </section>
+        </section>}
 
         <section>
           <h2>Round 2 — Tier Assignment</h2>
           <p>
-            Ranks all teams overall from Round 1 results and splits them into your chosen number of tiers
-            (teams that do not fit into these tiers will be eliminated).
+            {isSeriesPlayoffs
+              ? 'Each tier plays a seeded knockout round. With eight teams, seeds 1 vs 5, 2 vs 6, 3 vs 7, and 4 vs 8 produce four Round 2 matches; the winners advance.'
+              : 'Ranks all teams overall from Round 1 results and splits them into your chosen number of tiers (teams that do not fit into these tiers will be eliminated).'}
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1rem' }}>
             <label>
@@ -690,9 +721,9 @@ export function AdminTournamentManage() {
                 }}
               >
                 <option value={4}>4 Tiers (Platinum, Gold, Silver, Bronze)</option>
-                <option value={3}>3 Tiers (Platinum, Gold, Silver)</option>
-                <option value={2}>2 Tiers (Platinum, Gold)</option>
-                <option value={1}>1 Tier (Platinum only)</option>
+                <option value={3}>3 Tiers (Gold, Silver, Bronze)</option>
+                <option value={2}>2 Tiers (Gold, Silver)</option>
+                <option value={1}>1 Tier (Gold only)</option>
               </select>
             </label>
             <label>
@@ -776,10 +807,12 @@ export function AdminTournamentManage() {
         <section>
           <h2>Round 3 &amp; 4 — Playoff Knockout</h2>
           <p>
-            Takes the top qualifying teams from each active tier's Round 2 standings into a knockout bracket.
+            {isSeriesPlayoffs
+              ? 'The four Round 2 winners in each tier advance to two Round 3 semifinals. Those semifinal winners meet in one Round 4 final.'
+              : 'Takes the top qualifying teams from each active tier\'s Round 2 standings into a knockout bracket. With four qualifiers, the semifinals are seed 1 vs 3 and seed 2 vs 4.'}
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1rem' }}>
-            <label>
+            {!isSeriesPlayoffs && <label>
               Qualifying teams per tier
               <select
                 value={topCount}
@@ -793,7 +826,7 @@ export function AdminTournamentManage() {
                 <option value={2}>Top 2 (Final only)</option>
                 <option value={8}>Top 8 (Quarterfinals, Semifinals &amp; Final)</option>
               </select>
-            </label>
+            </label>}
             <label>
               Playoffs Start Time
               <input
@@ -829,7 +862,9 @@ export function AdminTournamentManage() {
                     endTime: r3EndTime,
                   }),
                 {
-                  successMsg: `Playoff knockout bracket generated successfully for top ${topCount} qualifying teams per tier!`,
+                  successMsg: isSeriesPlayoffs
+                    ? 'Round 3 semifinals and Round 4 finals generated for each tier.'
+                    : `Playoff knockout bracket generated successfully for top ${topCount} qualifying teams per tier!`,
                   title: 'Generate Playoffs',
                 }
               )
@@ -840,7 +875,7 @@ export function AdminTournamentManage() {
         </section>
       </div>
 
-      {['single_elimination', 'double_elimination', 'round_robin', 'pool_play'].includes(tournament.format) && (
+      {!isSeriesPlayoffs && ['single_elimination', 'double_elimination', 'round_robin', 'pool_play'].includes(tournament.format) && (
         <section style={{ marginTop: '1rem' }}>
           <h2>Full Bracket Schedule ({tournament.format.replace('_', ' ')})</h2>
           <p>Generates the initial bracket and schedules matches across courts within your selected round start &amp; end time window.</p>
@@ -929,7 +964,8 @@ export function AdminTournamentManage() {
                     <option value="all">All Rounds</option>
                     <option value="1">Round 1 (Groups)</option>
                     <option value="2">Round 2 (Tiers)</option>
-                    <option value="3">Round 3/4 (Playoffs)</option>
+                    <option value="3">Round 3 (Semifinals)</option>
+                    {isSeriesPlayoffs && <option value="4">Round 4 (Final)</option>}
                   </select>
                 </div>
 
@@ -1183,7 +1219,8 @@ function MatchRow({ match, courts, onChange }: { match: Match; courts: Court[]; 
   let stageLabel = `Round ${match.stage}`;
   if (match.stage === 1) stageLabel = 'Round 1';
   else if (match.stage === 2) stageLabel = 'Round 2';
-  else if (match.stage === 3) stageLabel = match.round === 1 ? 'Semifinal' : match.round === 2 ? 'Final' : 'Knockout';
+  else if (match.stage === 3) stageLabel = 'Round 3 — Semifinal';
+  else if (match.stage === 4) stageLabel = 'Round 4 — Final';
 
   return (
     <tr>
@@ -1196,7 +1233,7 @@ function MatchRow({ match, courts, onChange }: { match: Match; courts: Court[]; 
         )}
       </td>
       <td>{match.round}</td>
-      <td>{match.bracket_type === 'pool' ? ((match.match_number - 1) % 1000) + 1 : match.match_number}</td>
+      <td>{match.game_number ?? match.match_number}</td>
       <td>
         <span className="match-teams">
           <span>{match.team1_name ?? 'TBD'}</span>

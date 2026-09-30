@@ -11,6 +11,7 @@ interface Tournament {
   status: string;
   start_date: string | null;
   end_date: string | null;
+  series_stage?: string | null;
 }
 interface Team {
   id: number;
@@ -18,6 +19,8 @@ interface Team {
   player1_name: string;
   player2_name: string | null;
   pool: string | null;
+  tier: 'platinum' | 'gold' | 'silver' | 'bronze' | null;
+  seed: number | null;
 }
 interface Match {
   id: number;
@@ -25,6 +28,7 @@ interface Match {
   bracket_type: string;
   round: number;
   match_number: number;
+  game_number?: number;
   team1_id: number | null;
   team2_id: number | null;
   team1_name: string | null;
@@ -46,6 +50,7 @@ interface Standing {
 }
 interface PlayoffMatch {
   id: number;
+  stage: number;
   round: number;
   matchNumber: number;
   roundLabel: string;
@@ -233,9 +238,13 @@ export function TournamentDetail() {
   useEffect(load, [id]);
 
   useEffect(() => {
-    const groupKeys = new Set(teams.map((team) => team.pool ?? 'Ungrouped'));
+    const groupKeys = new Set(
+      teams.map((team) =>
+        tournament?.series_stage === 'playoffs' ? team.tier ?? 'Unassigned' : team.pool ?? 'Ungrouped'
+      )
+    );
     setCollapsedTeamGroups(groupKeys);
-  }, [teams]);
+  }, [teams, tournament?.series_stage]);
 
   const registerTeam = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -318,12 +327,19 @@ export function TournamentDetail() {
         <>
           <h2>Teams</h2>
           {(() => {
-            const teamGroups = teams.reduce<Record<string, Team[]>>((acc, t) => {
-              const key = t.pool ?? 'Ungrouped';
+            const visibleTeams = tournament.series_stage === 'playoffs'
+              ? teams.filter((team) => team.tier !== null)
+              : teams;
+            const teamGroups = visibleTeams.reduce<Record<string, Team[]>>((acc, t) => {
+              const key = tournament.series_stage === 'playoffs' ? t.tier ?? 'Unassigned' : t.pool ?? 'Ungrouped';
               (acc[key] ??= []).push(t);
               return acc;
             }, {});
+            const playoffTierOrder = ['platinum', 'gold', 'silver', 'bronze', 'Unassigned'];
             const groupKeys = Object.keys(teamGroups).sort((a, b) => {
+              if (tournament.series_stage === 'playoffs') {
+                return playoffTierOrder.indexOf(a) - playoffTierOrder.indexOf(b);
+              }
               if (a === 'Ungrouped') return 1;
               if (b === 'Ungrouped') return -1;
               return a.localeCompare(b);
@@ -342,7 +358,15 @@ export function TournamentDetail() {
               return (
                 <div key={key} className="team-group">
                   <button type="button" className="team-group__header" onClick={() => toggleGroup(key)}>
-                    <span>{key === 'Ungrouped' ? 'Ungrouped' : `Group ${key}`}</span>
+                    <span>
+                      {tournament.series_stage === 'playoffs'
+                        ? key === 'Unassigned'
+                          ? 'Not assigned to a tier'
+                          : `${key.charAt(0).toUpperCase()}${key.slice(1)} tier`
+                        : key === 'Ungrouped'
+                          ? 'Ungrouped'
+                          : `Group ${key}`}
+                    </span>
                     <span className="team-group__header-right">
                       <span>{groupTeams.length} teams</span>
                       <span className={`team-group__chevron${isCollapsed ? '' : ' is-open'}`}>▾</span>
@@ -384,7 +408,7 @@ export function TournamentDetail() {
         </>
       )}
 
-      {(view === 'all' || view === 'standings') && standings.length > 0 && (
+      {(view === 'all' || view === 'standings') && tournament.series_stage !== 'playoffs' && standings.length > 0 && (
         <>
           <h2>Round 1 — Group Standings</h2>
           <div className="groups-grid">
@@ -604,9 +628,13 @@ export function TournamentDetail() {
           if (filterStage !== 'all' && String(m.stage) !== filterStage) return false;
           if (filterStatus !== 'all' && m.status !== filterStatus) return false;
           if (filterGroup !== 'all') {
-            const t1Pool = teams.find((t) => t.id === m.team1_id)?.pool;
-            const t2Pool = teams.find((t) => t.id === m.team2_id)?.pool;
-            if (t1Pool !== filterGroup && t2Pool !== filterGroup) return false;
+            if (['2', '3', '4'].includes(filterStage)) {
+              if (m.bracket_type !== filterGroup) return false;
+            } else {
+              const t1Pool = teams.find((t) => t.id === m.team1_id)?.pool;
+              const t2Pool = teams.find((t) => t.id === m.team2_id)?.pool;
+              if (t1Pool !== filterGroup && t2Pool !== filterGroup) return false;
+            }
           }
           if (filterTeam !== 'all') {
             const tId = Number(filterTeam);
@@ -618,7 +646,17 @@ export function TournamentDetail() {
         const isFiltered =
           filterStage !== 'all' || filterStatus !== 'all' || filterGroup !== 'all' || filterTeam !== 'all';
 
-        const availableGroups = Array.from(new Set(teams.map((t) => t.pool).filter((p): p is string => !!p))).sort();
+        const isTierFilter = ['2', '3', '4'].includes(filterStage);
+        const availableGroups = isTierFilter
+          ? Array.from(
+              new Set(
+                sortedMatches
+                  .filter((match) => filterStage === 'all' || String(match.stage) === filterStage)
+                  .filter((match) => ['platinum', 'gold', 'silver', 'bronze'].includes(match.bracket_type))
+                  .map((match) => match.bracket_type)
+              )
+            ).sort((a, b) => TIER_ORDER.indexOf(a as (typeof TIER_ORDER)[number]) - TIER_ORDER.indexOf(b as (typeof TIER_ORDER)[number]))
+          : Array.from(new Set(teams.map((t) => t.pool).filter((p): p is string => !!p))).sort();
 
         return (
           <>
@@ -626,11 +664,19 @@ export function TournamentDetail() {
             <div className="filter-toolbar">
               <div className="filter-item">
                 <label>Round:</label>
-                <select value={filterStage} onChange={(e) => setFilterStage(e.target.value)}>
+                <select
+                  value={filterStage}
+                  onChange={(e) => {
+                    setFilterStage(e.target.value);
+                    setFilterGroup('all');
+                    setFilterTeam('all');
+                  }}
+                >
                   <option value="all">All Rounds</option>
                   <option value="1">Round 1 (Groups)</option>
                   <option value="2">Round 2 (Tiers)</option>
-                  <option value="3">Round 3/4 (Playoffs)</option>
+                  <option value="3">Round 3 (Semifinals)</option>
+                  {tournament.series_stage === 'playoffs' && <option value="4">Round 4 (Final)</option>}
                 </select>
               </div>
 
@@ -645,22 +691,18 @@ export function TournamentDetail() {
               </div>
 
               <div className="filter-item">
-                <label>Group:</label>
+                <label>{isTierFilter ? 'Tier:' : 'Group:'}</label>
                 <select
                   value={filterGroup}
                   onChange={(e) => {
-                    const group = e.target.value;
-                    setFilterGroup(group);
-                    if (filterTeam !== 'all') {
-                      const selected = teams.find((t) => String(t.id) === filterTeam);
-                      if (group !== 'all' && selected?.pool !== group) setFilterTeam('all');
-                    }
+                    setFilterGroup(e.target.value);
+                    setFilterTeam('all');
                   }}
                 >
-                  <option value="all">All Groups</option>
+                  <option value="all">{isTierFilter ? 'All Tiers' : 'All Groups'}</option>
                   {availableGroups.map((g) => (
                     <option key={g} value={g}>
-                      Group {g}
+                      {isTierFilter ? `${g.charAt(0).toUpperCase()}${g.slice(1)}` : `Group ${g}`}
                     </option>
                   ))}
                 </select>
@@ -668,10 +710,16 @@ export function TournamentDetail() {
 
               <div className="filter-item">
                 <label>Team:</label>
-                <select value={filterTeam} onChange={(e) => setFilterTeam(e.target.value)}>
+                <select
+                  value={filterTeam}
+                  onChange={(e) => setFilterTeam(e.target.value)}
+                >
                   <option value="all">All Teams</option>
                   {teams
-                    .filter((t) => filterGroup === 'all' || t.pool === filterGroup)
+                    .filter((t) => {
+                      if (filterGroup === 'all') return true;
+                      return isTierFilter ? t.tier === filterGroup : t.pool === filterGroup;
+                    })
                     .map((t) => (
                       <option key={t.id} value={t.id}>
                         {t.name}
@@ -765,7 +813,7 @@ export function TournamentDetail() {
                               const statusLabel =
                                 m.status === 'completed' ? 'Final' : m.status === 'in_progress' ? 'Live' : 'Scheduled';
                               const time = formatMatchTime(m.scheduled_time);
-                              const gameNumber = m.bracket_type === 'pool' ? ((m.match_number - 1) % 1000) + 1 : m.match_number;
+                              const gameNumber = m.game_number ?? m.match_number;
 
                               return (
                                 <div key={m.id} className="schedule-card">

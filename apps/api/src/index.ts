@@ -8,6 +8,7 @@ import { teamRoutes } from './routes/teams';
 import { courtRoutes } from './routes/courts';
 import { matchRoutes } from './routes/matches';
 import { userRoutes } from './routes/users';
+import { homeRoutes } from './routes/home';
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -40,5 +41,6 @@ app.route('/api', teamRoutes);
 app.route('/api', courtRoutes);
 app.route('/api', matchRoutes);
 app.route('/api/users', userRoutes);
+app.route('/api', homeRoutes);
 
 export default app;

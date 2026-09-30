@@ -151,13 +151,20 @@ export function generateDoubleElimination(teams: TeamSeed[]): BracketPlan {
   return { matches, links };
 }
 
-export function generateRoundRobin(teams: TeamSeed[], bracketType: BracketType = 'main'): BracketPlan {
+export function generateRoundRobin(
+  teams: TeamSeed[],
+  bracketType: BracketType = 'main',
+  crossSeedOpeningRound = false
+): BracketPlan {
   const ids = teams.map((t) => t.id);
   const list = ids.length % 2 === 0 ? [...ids] : [...ids, -1]; // -1 = bye
   const n = list.length;
   const rounds = n - 1;
   const matches: MatchDraft[] = [];
-  const arr = [...list];
+  const half = n / 2;
+  const arr = crossSeedOpeningRound && ids.length % 2 === 0
+    ? [...list.slice(0, half), ...list.slice(half).reverse()]
+    : [...list];
   for (let r = 0; r < rounds; r++) {
     let matchNumber = 1;
     for (let i = 0; i < n / 2; i++) {
@@ -170,6 +177,32 @@ export function generateRoundRobin(teams: TeamSeed[], bracketType: BracketType =
     arr.splice(1, 0, arr.pop()!);
   }
   return { matches, links: [] };
+}
+
+export function generateCrossSeededSemifinals(teams: TeamSeed[], bracketType: BracketType = 'main'): BracketPlan {
+  if (teams.length !== 4) {
+    throw new Error('Cross-seeded semifinals require exactly four teams');
+  }
+
+  return {
+    matches: [
+      { round: 1, match_number: 1, bracket_type: bracketType, team1_id: teams[0].id, team2_id: teams[2].id },
+      { round: 1, match_number: 2, bracket_type: bracketType, team1_id: teams[1].id, team2_id: teams[3].id },
+      { round: 2, match_number: 1, bracket_type: bracketType, team1_id: null, team2_id: null },
+    ],
+    links: [
+      {
+        from: { bracket_type: bracketType, round: 1, match_number: 1 },
+        to: { bracket_type: bracketType, round: 2, match_number: 1, slot: 1 },
+        type: 'winner',
+      },
+      {
+        from: { bracket_type: bracketType, round: 1, match_number: 2 },
+        to: { bracket_type: bracketType, round: 2, match_number: 1, slot: 2 },
+        type: 'winner',
+      },
+    ],
+  };
 }
 
 // Pool play: split teams into pools (round robin within each). Playoffs are generated

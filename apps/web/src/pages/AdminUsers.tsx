@@ -23,6 +23,13 @@ export function AdminUsers() {
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editEmail, setEditEmail] = useState('');
+  const [passwordUserId, setPasswordUserId] = useState<number | null>(null);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [notice, setNotice] = useState<string | null>(null);
 
   const load = () => api.get<{ users: ManagedUser[] }>('/api/users').then((r) => setUsers(r.users));
   useEffect(() => {
@@ -44,10 +51,69 @@ export function AdminUsers() {
     }
   };
 
+  const saveProfile = async (u: ManagedUser) => {
+    setError(null);
+    setNotice(null);
+    setSavingId(u.id);
+    try {
+      await api.patch(`/api/users/${u.id}`, { name: editName, email: editEmail });
+      setEditingId(null);
+      setNotice(`Updated ${editName.trim()}.`);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to update user');
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  const resetPassword = async (u: ManagedUser, event: React.FormEvent) => {
+    event.preventDefault();
+    setError(null);
+    setNotice(null);
+    if (newPassword.length < 8) {
+      setError('Password must be at least 8 characters');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setError('Passwords do not match');
+      return;
+    }
+    setSavingId(u.id);
+    try {
+      await api.patch(`/api/users/${u.id}/password`, { new_password: newPassword });
+      setPasswordUserId(null);
+      setNewPassword('');
+      setConfirmPassword('');
+      setNotice(`Password reset for ${u.email}.`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to reset password');
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  const deleteUser = async (u: ManagedUser) => {
+    if (!window.confirm(`Delete the account for ${u.name} (${u.email})? This cannot be undone.`)) return;
+    setError(null);
+    setNotice(null);
+    setSavingId(u.id);
+    try {
+      await api.delete(`/api/users/${u.id}`);
+      setNotice(`Deleted ${u.email}. Tournament records were retained.`);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to delete user');
+    } finally {
+      setSavingId(null);
+    }
+  };
+
   return (
     <div className="card">
       <h1>Admin: Users</h1>
       {error && <p className="error">{error}</p>}
+      {notice && <p className="success-message">{notice}</p>}
       <div className="table-container">
         <table className="table">
           <thead>
@@ -55,6 +121,7 @@ export function AdminUsers() {
               <th>Name</th>
               <th>Email</th>
               <th>Role</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -76,10 +143,92 @@ export function AdminUsers() {
                       ))}
                     </select>
                   </td>
+                  <td className="admin-user-actions">
+                    <button
+                      type="button"
+                      className="button-sm button--outline"
+                      disabled={savingId === u.id}
+                      onClick={() => {
+                        setError(null);
+                        setPasswordUserId(null);
+                        setEditingId(editingId === u.id ? null : u.id);
+                        setEditName(u.name);
+                        setEditEmail(u.email);
+                      }}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      className="button-sm button--outline"
+                      disabled={savingId === u.id}
+                      onClick={() => {
+                        setError(null);
+                        setEditingId(null);
+                        setPasswordUserId(passwordUserId === u.id ? null : u.id);
+                        setNewPassword('');
+                        setConfirmPassword('');
+                      }}
+                    >
+                      Reset password
+                    </button>
+                    <button
+                      type="button"
+                      className="button-sm button--danger"
+                      disabled={savingId === u.id || u.id === currentUser?.id}
+                      onClick={() => deleteUser(u)}
+                    >
+                      Delete
+                    </button>
+                  </td>
                 </tr>
+                {editingId === u.id && (
+                  <tr>
+                    <td colSpan={4}>
+                      <div className="admin-user-panel">
+                        <label>
+                          Name
+                          <input value={editName} onChange={(e) => setEditName(e.target.value)} required />
+                        </label>
+                        <label>
+                          Email
+                          <input type="email" value={editEmail} onChange={(e) => setEditEmail(e.target.value)} required />
+                        </label>
+                        <button type="button" disabled={savingId === u.id} onClick={() => saveProfile(u)}>
+                          {savingId === u.id ? 'Saving...' : 'Save changes'}
+                        </button>
+                        <button type="button" className="button--outline" onClick={() => setEditingId(null)}>
+                          Cancel
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                {passwordUserId === u.id && (
+                  <tr>
+                    <td colSpan={4}>
+                      <form className="admin-user-panel" onSubmit={(event) => resetPassword(u, event)}>
+                        <label>
+                          New password
+                          <input type="password" autoComplete="new-password" minLength={8} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required />
+                        </label>
+                        <label>
+                          Confirm password
+                          <input type="password" autoComplete="new-password" minLength={8} value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required />
+                        </label>
+                        <button type="submit" disabled={savingId === u.id}>
+                          {savingId === u.id ? 'Resetting...' : 'Set new password'}
+                        </button>
+                        <button type="button" className="button--outline" onClick={() => setPasswordUserId(null)}>
+                          Cancel
+                        </button>
+                      </form>
+                    </td>
+                  </tr>
+                )}
                 {u.role === 'superuser' && (
                   <tr>
-                    <td colSpan={3}>
+                    <td colSpan={4}>
                       <SuperuserTournamentPicker userId={u.id} tournaments={tournaments} />
                     </td>
                   </tr>

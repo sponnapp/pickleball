@@ -2,6 +2,17 @@ import type { Env } from './types';
 
 export type Tier = 'platinum' | 'gold' | 'silver' | 'bronze';
 
+export function tiersForCount(tierCount: number): Tier[] {
+  const count = Math.max(1, Math.min(4, tierCount));
+  const configured: Tier[][] = [
+    ['gold'],
+    ['gold', 'silver'],
+    ['gold', 'silver', 'bronze'],
+    ['platinum', 'gold', 'silver', 'bronze'],
+  ];
+  return configured[count - 1];
+}
+
 export interface StandingRow {
   teamId: number;
   teamName: string;
@@ -17,13 +28,15 @@ interface TeamRow {
   name: string;
   pool: string | null;
   tier: Tier | null;
+  qualifier_wins: number;
+  qualifier_point_differential: number;
 }
 
 // Computes raw win/loss/point-differential stats from completed matches in a given
 // stage (1 = Round 1 random-group pool play, 2 = Round 2 tier round-robin).
 async function computeTeamStats(db: Env['DB'], tournamentId: string | number, stage: number) {
   const { results: teams } = await db
-    .prepare('SELECT id, name, pool, tier FROM teams WHERE tournament_id = ?')
+    .prepare('SELECT id, name, pool, tier, qualifier_wins, qualifier_point_differential FROM teams WHERE tournament_id = ?')
     .bind(tournamentId)
     .all<TeamRow>();
 
@@ -36,7 +49,16 @@ async function computeTeamStats(db: Env['DB'], tournamentId: string | number, st
     .all<{ team1_id: number; team2_id: number; winner_id: number; score_json: string | null }>();
 
   const stats = new Map(
-    teams.map((t) => [t.id, { team: t, wins: 0, losses: 0, pointsFor: 0, pointsAgainst: 0 }])
+    teams.map((t) => [
+      t.id,
+      {
+        team: t,
+        wins: stage === 1 ? t.qualifier_wins : 0,
+        losses: 0,
+        pointsFor: stage === 1 ? t.qualifier_point_differential : 0,
+        pointsAgainst: 0,
+      },
+    ])
   );
 
   for (const m of matches) {
@@ -83,6 +105,12 @@ async function computeTeamStats(db: Env['DB'], tournamentId: string | number, st
 // Round 1 standings: grouped and sorted by pool, from the random-group pool-play matches.
 // Only includes teams that have actually been assigned to a pool.
 export async function computePoolStandings(db: Env['DB'], tournamentId: string | number): Promise<StandingRow[]> {
+  const tournament = await db
+    .prepare('SELECT series_stage FROM tournaments WHERE id = ?')
+    .bind(tournamentId)
+    .first<{ series_stage: string | null }>();
+  if (tournament?.series_stage === 'playoffs') return [];
+
   const rows = await computeTeamStats(db, tournamentId, 1);
   return rows
     .filter((r) => r.pool !== null)
@@ -115,9 +143,8 @@ export function assignTiers(
   tierCount: number = 4,
   teamsPerTier?: number
 ): Record<number, Tier> {
-  const allTiers: Tier[] = ['platinum', 'gold', 'silver', 'bronze'];
   const count = Math.max(1, Math.min(4, tierCount));
-  const activeTiers = allTiers.slice(0, count);
+  const activeTiers = tiersForCount(count);
   const n = ranking.length;
   const result: Record<number, Tier> = {};
 
