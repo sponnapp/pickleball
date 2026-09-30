@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { Env, Variables } from '../types';
-import { requireAdmin, requireTournamentManager } from '../middleware';
+import { requireAdmin, requireSuperAdmin, requireTournamentManager } from '../middleware';
 import { computeOverallRanking, computePoolStandings, computeTierStandings } from '../standings';
 
 export const tournamentRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -163,6 +163,37 @@ tournamentRoutes.post('/admin/series/:seriesId/playoffs', requireAdmin, async (c
   }
 
   return c.json({ tournament_id: playoffTournament.id, team_count: combinedRanking.length }, 201);
+});
+
+tournamentRoutes.delete('/admin/series/:seriesId', requireSuperAdmin, async (c) => {
+  const seriesId = Number(c.req.param('seriesId'));
+  if (!Number.isInteger(seriesId) || seriesId < 1) return c.json({ error: 'Invalid series id' }, 400);
+
+  const series = await c.env.DB.prepare('SELECT id, name FROM competition_series WHERE id = ?')
+    .bind(seriesId)
+    .first<{ id: number; name: string }>();
+  if (!series) return c.json({ error: 'Tournament series not found' }, 404);
+
+  const { results: tournaments } = await c.env.DB.prepare('SELECT id FROM tournaments WHERE series_id = ?')
+    .bind(seriesId)
+    .all<{ id: number }>();
+  const tournamentIds = tournaments.map((tournament) => tournament.id);
+
+  for (const tournament of tournamentIds) {
+    await c.env.DB.prepare('DELETE FROM homepage_brochures WHERE target_type = ? AND target_id = ?')
+      .bind('tournament', tournament)
+      .run();
+    await c.env.DB.prepare('DELETE FROM matches WHERE tournament_id = ?').bind(tournament).run();
+    await c.env.DB.prepare('DELETE FROM teams WHERE tournament_id = ?').bind(tournament).run();
+    await c.env.DB.prepare('DELETE FROM courts WHERE tournament_id = ?').bind(tournament).run();
+    await c.env.DB.prepare('DELETE FROM tournaments WHERE id = ?').bind(tournament).run();
+  }
+
+  await c.env.DB.prepare('DELETE FROM homepage_brochures WHERE target_type = ? AND target_id = ?')
+    .bind('series', seriesId)
+    .run();
+  await c.env.DB.prepare('DELETE FROM competition_series WHERE id = ?').bind(seriesId).run();
+  return c.json({ ok: true, deleted_series: series.name, deleted_tournaments: tournamentIds.length });
 });
 
 tournamentRoutes.get('/:id', async (c) => {

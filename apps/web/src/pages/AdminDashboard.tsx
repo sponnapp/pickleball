@@ -114,6 +114,17 @@ export function AdminDashboard() {
     }
   };
 
+  const deleteSeries = async (series: CompetitionSeries) => {
+    if (!window.confirm(`Delete series "${series.name}" and all of its tournaments? This cannot be undone.`)) return;
+    setError(null);
+    try {
+      await api.delete(`/api/tournaments/admin/series/${series.id}`);
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to delete series');
+    }
+  };
+
   const addBrochure = async (event: React.FormEvent) => {
     event.preventDefault();
     setError(null);
@@ -330,6 +341,11 @@ export function AdminDashboard() {
                     onClick={() => createPlayoffs(series)}
                   >
                     Combine all tournaments &amp; create playoffs
+                  </button>
+                )}
+                {user?.role === 'admin' && (
+                  <button type="button" className="button--danger button-sm" onClick={() => deleteSeries(series)}>
+                    Delete series
                   </button>
                 )}
               </li>
