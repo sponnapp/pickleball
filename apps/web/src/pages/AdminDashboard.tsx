@@ -322,13 +322,15 @@ export function AdminDashboard() {
       {activeTab === 'tournaments' && (
         <>
           <h2>{user?.role === 'superuser' ? 'Your assigned tournaments' : 'All tournaments'}</h2>
-          <ul className="list">
+          <ul className="list admin-tournament-list">
             {tournaments.map((t) => (
-              <li key={t.id}>
-                <Link to={`/admin/tournaments/${t.id}`}>{t.name}</Link>
-                <span className="tag">{t.status}</span>
-                {t.competition_type === 'series' && <span className="tag">Series</span>}
-                <button className="button--danger" onClick={() => deleteTournament(t)}>
+              <li key={t.id} className="admin-tournament-row">
+                <div className="admin-tournament-row__info">
+                  <Link to={`/admin/tournaments/${t.id}`}>{t.name}</Link>
+                  <span className="tag">{t.status}</span>
+                  {t.competition_type === 'series' && <span className="tag">Series</span>}
+                </div>
+                <button className="button--danger button-sm admin-tournament-row__delete" onClick={() => deleteTournament(t)}>
                   Delete
                 </button>
               </li>

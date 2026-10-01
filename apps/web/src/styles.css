@@ -602,6 +602,24 @@ button.button--danger:hover,
   border-bottom: 1px solid rgba(0, 0, 0, 0.08);
 }
 
+.admin-tournament-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.admin-tournament-row__info {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+.admin-tournament-row__delete {
+  flex-shrink: 0;
+  margin: 0;
+}
+
 /* ── Tables ──────────────────────────────────────────────────────────── */
 .table-container {
   width: 100%;
@@ -1249,6 +1267,19 @@ button.button--danger:hover,
   .table:not(.table--wide) input,
   .table:not(.table--wide) select {
     max-width: 100%;
+  }
+
+  .admin-tournament-row {
+    flex-wrap: wrap;
+    row-gap: 10px;
+    padding-bottom: 6px;
+  }
+  .admin-tournament-row__info {
+    flex-basis: 100%;
+  }
+  .admin-tournament-row__delete {
+    margin-left: auto;
+    margin-top: 4px;
   }
 }
 
