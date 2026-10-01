@@ -326,6 +326,11 @@ export function AdminTournamentManage() {
   const [filterBracket, setFilterBracket] = useState<string>('all');
   const [filterTeam, setFilterTeam] = useState<string>('all');
 
+  // Section tabs
+  const [teamsTab, setTeamsTab] = useState<'list' | 'create' | 'upload'>('list');
+  const [roundsTab, setRoundsTab] = useState<'round1' | 'round2' | 'round3' | 'pool'>('round1');
+  const [showManualMatchModal, setShowManualMatchModal] = useState(false);
+
   const load = () => {
     Promise.all([
       api.get<{ tournament: Tournament }>(`/api/tournaments/${id}`),
@@ -401,6 +406,13 @@ export function AdminTournamentManage() {
     });
   };
   useEffect(load, [id]);
+
+  // Round 1 tab doesn't exist for series playoffs (seeding comes from T1/T2), so fall back to Round 2.
+  useEffect(() => {
+    if (tournament?.series_stage === 'playoffs' && roundsTab === 'round1') {
+      setRoundsTab('round2');
+    }
+  }, [tournament?.series_stage, roundsTab]);
 
   // Auto-dismiss notification popup after 5 seconds
   useEffect(() => {
@@ -673,7 +685,7 @@ export function AdminTournamentManage() {
       <section>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', marginBottom: '12px' }}>
           <h2 style={{ margin: 0 }}>Teams ({teams.length})</h2>
-          {teams.length > 0 && (
+          {teamsTab === 'list' && teams.length > 0 && (
             <button
               type="button"
               className="button--danger"
@@ -684,126 +696,165 @@ export function AdminTournamentManage() {
             </button>
           )}
         </div>
-        <div className="table-container">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Player 1</th>
-                <th>Player 2</th>
-                <th>Seed</th>
-                <th>Group</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {teams.map((t) => (
-                <tr key={t.id}>
-                  <td>
-                    <input
-                      defaultValue={t.name}
-                      onBlur={(e) => runAction(() => api.patch(`/api/teams/${t.id}`, { name: e.target.value }))}
-                      style={{ minWidth: '8rem' }}
-                    />
-                  </td>
-                  <td>
-                    <input
-                      defaultValue={t.player1_name}
-                      onBlur={(e) =>
-                        runAction(() => api.patch(`/api/teams/${t.id}`, { player1_name: e.target.value }))
-                      }
-                      style={{ minWidth: '7rem' }}
-                    />
-                  </td>
-                  <td>
-                    <input
-                      defaultValue={t.player2_name ?? ''}
-                      onBlur={(e) =>
-                        runAction(() => api.patch(`/api/teams/${t.id}`, { player2_name: e.target.value || null }))
-                      }
-                      style={{ minWidth: '7rem' }}
-                    />
-                  </td>
-                  <td>
-                    <input
-                      type="number"
-                      defaultValue={t.seed ?? ''}
-                      onBlur={(e) => runAction(() => api.patch(`/api/teams/${t.id}`, { seed: Number(e.target.value) }))}
-                      style={{ width: '4rem' }}
-                    />
-                  </td>
-                  <td>
-                    <input
-                      defaultValue={t.pool ?? ''}
-                      onBlur={(e) => runAction(() => api.patch(`/api/teams/${t.id}`, { pool: e.target.value }))}
-                      style={{ width: '3.5rem' }}
-                    />
-                  </td>
-                  <td>
-                    <button onClick={() => runAction(() => api.delete(`/api/teams/${t.id}`))}>Remove</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            runAction(() =>
-              api.post(`/api/tournaments/${id}/teams`, {
-                name: teamName,
-                player1_name: player1,
-                player2_name: player2 || undefined,
-              })
-            ).then(() => {
-              setTeamName('');
-              setPlayer1('');
-              setPlayer2('');
-            });
-          }}
-        >
-          <input placeholder="Team name" value={teamName} onChange={(e) => setTeamName(e.target.value)} required />
-          <input placeholder="Player 1" value={player1} onChange={(e) => setPlayer1(e.target.value)} required />
-          <input placeholder="Player 2 (optional)" value={player2} onChange={(e) => setPlayer2(e.target.value)} />
-          <button type="submit">Add team</button>
-        </form>
+        <nav className="tab-nav">
+          <button type="button" className={`tab-nav-link${teamsTab === 'list' ? ' active' : ''}`} onClick={() => setTeamsTab('list')}>
+            Team List
+          </button>
+          <button type="button" className={`tab-nav-link${teamsTab === 'create' ? ' active' : ''}`} onClick={() => setTeamsTab('create')}>
+            Create Team
+          </button>
+          <button type="button" className={`tab-nav-link${teamsTab === 'upload' ? ' active' : ''}`} onClick={() => setTeamsTab('upload')}>
+            Upload
+          </button>
+        </nav>
 
-        <div className="csv-upload">
-          <h3>Bulk upload teams</h3>
-          <label className="csv-upload__file-label">
-            Choose CSV file
-            <input
-              type="file"
-              accept=".csv"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) handleCsvFile(file);
-                e.target.value = '';
-              }}
-            />
-          </label>
-          <p className="csv-upload__hint">
-            Columns: <code>name</code>, <code>player1_name</code>, <code>player2_name</code> (optional),{' '}
-            <code>seed</code> (optional), <code>pool</code> (optional)
-          </p>
-          {csvError && <p className="error">{csvError}</p>}
-          {csvTeams.length > 0 && (
-            <div className="csv-upload__preview">
-              <span>{csvTeams.length} teams ready to import</span>
-              <button type="button" onClick={importCsvTeams}>
-                Import teams
-              </button>
-              <button type="button" className="button--outline" onClick={() => setCsvTeams([])}>
-                Cancel
-              </button>
-            </div>
-          )}
-        </div>
+        {teamsTab === 'list' && (
+          <div className="table-container">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Player 1</th>
+                  <th>Player 2</th>
+                  <th>Seed</th>
+                  <th>Group</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {teams.map((t) => (
+                  <tr key={t.id}>
+                    <td>
+                      <input
+                        defaultValue={t.name}
+                        onBlur={(e) => runAction(() => api.patch(`/api/teams/${t.id}`, { name: e.target.value }))}
+                        style={{ minWidth: '8rem' }}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        defaultValue={t.player1_name}
+                        onBlur={(e) =>
+                          runAction(() => api.patch(`/api/teams/${t.id}`, { player1_name: e.target.value }))
+                        }
+                        style={{ minWidth: '7rem' }}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        defaultValue={t.player2_name ?? ''}
+                        onBlur={(e) =>
+                          runAction(() => api.patch(`/api/teams/${t.id}`, { player2_name: e.target.value || null }))
+                        }
+                        style={{ minWidth: '7rem' }}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        type="number"
+                        defaultValue={t.seed ?? ''}
+                        onBlur={(e) => runAction(() => api.patch(`/api/teams/${t.id}`, { seed: Number(e.target.value) }))}
+                        style={{ width: '4rem' }}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        defaultValue={t.pool ?? ''}
+                        onBlur={(e) => runAction(() => api.patch(`/api/teams/${t.id}`, { pool: e.target.value }))}
+                        style={{ width: '3.5rem' }}
+                      />
+                    </td>
+                    <td>
+                      <button onClick={() => runAction(() => api.delete(`/api/teams/${t.id}`))}>Remove</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {teamsTab === 'create' && (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              runAction(() =>
+                api.post(`/api/tournaments/${id}/teams`, {
+                  name: teamName,
+                  player1_name: player1,
+                  player2_name: player2 || undefined,
+                })
+              ).then(() => {
+                setTeamName('');
+                setPlayer1('');
+                setPlayer2('');
+              });
+            }}
+          >
+            <input placeholder="Team name" value={teamName} onChange={(e) => setTeamName(e.target.value)} required />
+            <input placeholder="Player 1" value={player1} onChange={(e) => setPlayer1(e.target.value)} required />
+            <input placeholder="Player 2 (optional)" value={player2} onChange={(e) => setPlayer2(e.target.value)} />
+            <button type="submit">Add team</button>
+          </form>
+        )}
+
+        {teamsTab === 'upload' && (
+          <div className="csv-upload">
+            <h3>Bulk upload teams</h3>
+            <label className="csv-upload__file-label">
+              Choose CSV file
+              <input
+                type="file"
+                accept=".csv"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleCsvFile(file);
+                  e.target.value = '';
+                }}
+              />
+            </label>
+            <p className="csv-upload__hint">
+              Columns: <code>name</code>, <code>player1_name</code>, <code>player2_name</code> (optional),{' '}
+              <code>seed</code> (optional), <code>pool</code> (optional)
+            </p>
+            {csvError && <p className="error">{csvError}</p>}
+            {csvTeams.length > 0 && (
+              <div className="csv-upload__preview">
+                <span>{csvTeams.length} teams ready to import</span>
+                <button type="button" onClick={importCsvTeams}>
+                  Import teams
+                </button>
+                <button type="button" className="button--outline" onClick={() => setCsvTeams([])}>
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </section>
 
+      <section>
+        <nav className="tab-nav">
+          {!isSeriesPlayoffs && (
+            <button type="button" className={`tab-nav-link${roundsTab === 'round1' ? ' active' : ''}`} onClick={() => setRoundsTab('round1')}>
+              Round 1
+            </button>
+          )}
+          <button type="button" className={`tab-nav-link${roundsTab === 'round2' ? ' active' : ''}`} onClick={() => setRoundsTab('round2')}>
+            Round 2
+          </button>
+          <button type="button" className={`tab-nav-link${roundsTab === 'round3' ? ' active' : ''}`} onClick={() => setRoundsTab('round3')}>
+            Round 3 &amp; 4
+          </button>
+          {!isSeriesPlayoffs && ['single_elimination', 'double_elimination', 'round_robin', 'pool_play'].includes(tournament.format) && (
+            <button type="button" className={`tab-nav-link${roundsTab === 'pool' ? ' active' : ''}`} onClick={() => setRoundsTab('pool')}>
+              Pool Play
+            </button>
+          )}
+        </nav>
+
       <div className="admin-row">
-        {!isSeriesPlayoffs && <section>
+        {!isSeriesPlayoffs && roundsTab === 'round1' && <section>
           <h2>Round 1 — Random Groups</h2>
           <p>Randomly splits teams into balanced groups and generates a round-robin schedule within each group. Choose teams below to spread them across different groups.</p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1rem' }}>
@@ -891,7 +942,7 @@ export function AdminTournamentManage() {
           </button>
         </section>}
 
-        <section>
+        {roundsTab === 'round2' && <section>
           <h2>Round 2 — Tier Assignment</h2>
           <p>
             {isSeriesPlayoffs
@@ -991,9 +1042,9 @@ export function AdminTournamentManage() {
           >
             Generate Round 2 tiers
           </button>
-        </section>
+        </section>}
 
-        <section>
+        {roundsTab === 'round3' && <section>
           <h2>Round 3 &amp; 4 — Playoff Knockout</h2>
           <p>
             {isSeriesPlayoffs
@@ -1061,10 +1112,10 @@ export function AdminTournamentManage() {
           >
             Generate playoffs
           </button>
-        </section>
+        </section>}
       </div>
 
-      {!isSeriesPlayoffs && ['single_elimination', 'double_elimination', 'round_robin', 'pool_play'].includes(tournament.format) && (
+      {!isSeriesPlayoffs && roundsTab === 'pool' && ['single_elimination', 'double_elimination', 'round_robin', 'pool_play'].includes(tournament.format) && (
         <section style={{ marginTop: '1rem' }}>
           <h2>Full Bracket Schedule ({tournament.format.replace('_', ' ')})</h2>
           <p>Generates the initial bracket and schedules matches across courts within your selected round start &amp; end time window.</p>
@@ -1114,101 +1165,129 @@ export function AdminTournamentManage() {
           </div>
         </section>
       )}
+      </section>
 
       <section>
         <div className="section-heading admin-matches-heading">
           <h2>Matches</h2>
-          <button type="button" onClick={() => exportSchedule(tournament.name, matches, courts)}>
-            Export Excel
-          </button>
-          <label
-            className="button"
-            style={{ cursor: importing ? 'not-allowed' : 'pointer', opacity: importing ? 0.7 : 1 }}
-          >
-            {importing ? 'Importing…' : 'Import Excel'}
-            <input
-              type="file"
-              accept=".xlsx,.xls"
-              style={{ display: 'none' }}
-              disabled={importing}
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                e.target.value = '';
-                if (file) handleImportFile(file);
-              }}
-            />
-          </label>
+          <div className="admin-matches-actions">
+            <button type="button" onClick={() => exportSchedule(tournament.name, matches, courts)}>
+              Export Excel
+            </button>
+            <label
+              className="button"
+              style={{ cursor: importing ? 'not-allowed' : 'pointer', opacity: importing ? 0.7 : 1 }}
+            >
+              {importing ? 'Importing…' : 'Import Excel'}
+              <input
+                type="file"
+                accept=".xlsx,.xls"
+                style={{ display: 'none' }}
+                disabled={importing}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = '';
+                  if (file) handleImportFile(file);
+                }}
+              />
+            </label>
+            <button type="button" className="button--outline" onClick={() => setShowManualMatchModal(true)}>
+              + Add Manual Match
+            </button>
+          </div>
         </div>
-        <details className="manual-match-panel">
-          <summary>Add manual match</summary>
-          <form
-            className="manual-match-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              runAction(
-                () => api.post(`/api/tournaments/${id}/matches`, {
-                  team1_id: Number(manualTeam1),
-                  team2_id: Number(manualTeam2),
-                  stage: manualStage,
-                  round: manualRound,
-                  bracket_type: manualBracket,
-                  court_id: manualCourt ? Number(manualCourt) : null,
-                  scheduled_time: manualTime || undefined,
-                }),
-                { successMsg: 'Manual match added and ready for scoring.', title: 'Add Manual Match' }
-              ).then(() => {
-                setManualTeam1('');
-                setManualTeam2('');
-                setManualCourt('');
-                setManualTime('');
-              });
-            }}
-          >
-            <label>
-              Team 1
-              <select value={manualTeam1} onChange={(e) => setManualTeam1(e.target.value)} required>
-                <option value="">Select team</option>
-                {teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
-              </select>
-            </label>
-            <label>
-              Team 2
-              <select value={manualTeam2} onChange={(e) => setManualTeam2(e.target.value)} required>
-                <option value="">Select team</option>
-                {teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
-              </select>
-            </label>
-            <label>
-              Round
-              <select value={manualStage} onChange={(e) => { const stage = Number(e.target.value); setManualStage(stage); setManualBracket(stage === 1 ? 'pool' : 'main'); }}>
-                <option value={1}>Round 1</option>
-                <option value={2}>Round 2</option>
-                <option value={3}>Round 3</option>
-                <option value={4}>Round 4</option>
-              </select>
-            </label>
-            <label>
-              Bracket / tier
-              <input value={manualBracket} onChange={(e) => setManualBracket(e.target.value)} placeholder="pool, gold, main" required />
-            </label>
-            <label>
-              Bracket round
-              <input type="number" min={1} value={manualRound} onChange={(e) => setManualRound(Number(e.target.value))} />
-            </label>
-            <label>
-              Court
-              <select value={manualCourt} onChange={(e) => setManualCourt(e.target.value)}>
-                <option value="">No court</option>
-                {courts.map((court) => <option key={court.id} value={court.id}>{court.name}</option>)}
-              </select>
-            </label>
-            <label>
-              Scheduled time
-              <input type="datetime-local" value={manualTime} onChange={(e) => setManualTime(e.target.value)} />
-            </label>
-            <button type="submit">Add match</button>
-          </form>
-        </details>
+        {showManualMatchModal &&
+          createPortal(
+            <div className="modal-overlay" onClick={() => setShowManualMatchModal(false)}>
+              <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+                <div className="modal-dialog-header">
+                  <h3>Add Manual Match</h3>
+                  <button
+                    type="button"
+                    className="modal-close-button"
+                    onClick={() => setShowManualMatchModal(false)}
+                    aria-label="Close"
+                  >
+                    ×
+                  </button>
+                </div>
+                <form
+                  className="manual-match-form manual-match-form--modal"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    runAction(
+                      () => api.post(`/api/tournaments/${id}/matches`, {
+                        team1_id: Number(manualTeam1),
+                        team2_id: Number(manualTeam2),
+                        stage: manualStage,
+                        round: manualRound,
+                        bracket_type: manualBracket,
+                        court_id: manualCourt ? Number(manualCourt) : null,
+                        scheduled_time: manualTime || undefined,
+                      }),
+                      { successMsg: 'Manual match added and ready for scoring.', title: 'Add Manual Match' }
+                    ).then(() => {
+                      setManualTeam1('');
+                      setManualTeam2('');
+                      setManualCourt('');
+                      setManualTime('');
+                      setShowManualMatchModal(false);
+                    });
+                  }}
+                >
+                  <label>
+                    Team 1
+                    <select value={manualTeam1} onChange={(e) => setManualTeam1(e.target.value)} required>
+                      <option value="">Select team</option>
+                      {teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    Team 2
+                    <select value={manualTeam2} onChange={(e) => setManualTeam2(e.target.value)} required>
+                      <option value="">Select team</option>
+                      {teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    Round
+                    <select value={manualStage} onChange={(e) => { const stage = Number(e.target.value); setManualStage(stage); setManualBracket(stage === 1 ? 'pool' : 'main'); }}>
+                      <option value={1}>Round 1</option>
+                      <option value={2}>Round 2</option>
+                      <option value={3}>Round 3</option>
+                      <option value={4}>Round 4</option>
+                    </select>
+                  </label>
+                  <label>
+                    Bracket / tier
+                    <input value={manualBracket} onChange={(e) => setManualBracket(e.target.value)} placeholder="pool, gold, main" required />
+                  </label>
+                  <label>
+                    Bracket round
+                    <input type="number" min={1} value={manualRound} onChange={(e) => setManualRound(Number(e.target.value))} />
+                  </label>
+                  <label>
+                    Court
+                    <select value={manualCourt} onChange={(e) => setManualCourt(e.target.value)}>
+                      <option value="">No court</option>
+                      {courts.map((court) => <option key={court.id} value={court.id}>{court.name}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    Scheduled time
+                    <input type="datetime-local" value={manualTime} onChange={(e) => setManualTime(e.target.value)} />
+                  </label>
+                  <div className="modal-dialog-footer">
+                    <button type="button" className="button--outline" onClick={() => setShowManualMatchModal(false)}>
+                      Cancel
+                    </button>
+                    <button type="submit">Add match</button>
+                  </div>
+                </form>
+              </div>
+            </div>,
+            document.body
+          )}
         {(() => {
           const tierSortOrder: Record<string, number> = { pool: 1, platinum: 2, gold: 3, silver: 4, bronze: 5 };
           const sortedMatches = [...matches].sort((a, b) => {
