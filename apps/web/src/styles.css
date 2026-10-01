@@ -1702,6 +1702,10 @@ button.button--danger:hover,
   margin: 0;
 }
 
+.match-delete-button {
+  margin-left: 8px;
+}
+
 .event-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

@@ -1293,6 +1293,17 @@ function MatchRow({ match, courts, onChange }: { match: Match; courts: Court[]; 
     }
   };
 
+  const deleteMatch = async () => {
+    if (!window.confirm(`Delete this match: ${match.team1_name ?? 'TBD'} vs ${match.team2_name ?? 'TBD'}?`)) return;
+    setError(null);
+    try {
+      await api.delete(`/api/matches/${match.id}`);
+      onChange();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete match');
+    }
+  };
+
   let stageLabel = `Round ${match.stage}`;
   if (match.stage === 1) stageLabel = 'Round 1';
   else if (match.stage === 2) stageLabel = 'Round 2';
@@ -1415,7 +1426,12 @@ function MatchRow({ match, courts, onChange }: { match: Match; courts: Court[]; 
           <span style={{ opacity: 0.5 }}>-</span>
         )}
       </td>
-      <td>{match.status}</td>
+      <td>
+        <span>{match.status}</span>
+        <button type="button" className="button-sm button--danger match-delete-button" onClick={deleteMatch}>
+          Delete
+        </button>
+      </td>
     </tr>
   );
 }

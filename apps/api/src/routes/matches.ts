@@ -253,6 +253,23 @@ matchRoutes.get('/tournaments/:tournamentId/matches', async (c) => {
   return c.json({ matches });
 });
 
+matchRoutes.delete('/matches/:id', requireAdmin, requireTournamentManager((c) => resolveMatchTournamentId(c.env.DB, c.req.param('id'))), async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id) || id < 1) return c.json({ error: 'Invalid match id' }, 400);
+  const match = await c.env.DB.prepare('SELECT id, tournament_id FROM matches WHERE id = ?')
+    .bind(id)
+    .first<{ id: number; tournament_id: number }>();
+  if (!match) return c.json({ error: 'Match not found' }, 404);
+
+  // Remove bracket pointers into this match before deleting the row.
+  await c.env.DB.batch([
+    c.env.DB.prepare('UPDATE matches SET next_match_id = NULL, next_match_slot = NULL WHERE next_match_id = ?').bind(id),
+    c.env.DB.prepare('UPDATE matches SET loser_next_match_id = NULL, loser_next_match_slot = NULL WHERE loser_next_match_id = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM matches WHERE id = ?').bind(id),
+  ]);
+  return c.json({ ok: true });
+});
+
 matchRoutes.post('/tournaments/:tournamentId/matches', requireAdmin, requireTournamentManager(async (c) => c.req.param('tournamentId')), async (c) => {
   const tournamentId = c.req.param('tournamentId')!;
   const body = await c.req.json<{
