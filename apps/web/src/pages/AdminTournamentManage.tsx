@@ -40,6 +40,8 @@ interface Match {
   team2_id: number | null;
   team1_name: string | null;
   team2_name: string | null;
+  team1_pool?: string | null;
+  team2_pool?: string | null;
   court_id: number | null;
   scheduled_time: string | null;
   status: string;
@@ -113,6 +115,32 @@ function resolveRoundEndTime(storageKey: string, defaultDT: string): string {
   return defaultDT;
 }
 
+function splitScoreColumns(scoreJson: string | null): { team1: string; team2: string } {
+  if (!scoreJson) return { team1: '', team2: '' };
+  try {
+    const games = JSON.parse(scoreJson);
+    if (!Array.isArray(games)) return { team1: '', team2: '' };
+    const valid = games.filter((g) => g && typeof g.team1 === 'number' && typeof g.team2 === 'number');
+    if (valid.length === 0) return { team1: '', team2: '' };
+    return {
+      team1: valid.map((g) => g.team1).join(', '),
+      team2: valid.map((g) => g.team2).join(', '),
+    };
+  } catch {
+    return { team1: '', team2: '' };
+  }
+}
+
+// Round 1 groups teams into pools (bracket_type is just the generic 'pool'), while
+// later stages group by tier (bracket_type IS the tier) — this gives one filterable column either way.
+function groupLabel(match: Match): string {
+  if (match.stage === 1) {
+    const pool = match.team1_pool ?? match.team2_pool;
+    return pool ? `Pool ${pool}` : '';
+  }
+  return match.bracket_type;
+}
+
 function exportSchedule(tournamentName: string, matches: Match[], courts: Court[]) {
   const courtNames = new Map(courts.map((court) => [court.id, court.name]));
   const rows = [...matches]
@@ -122,29 +150,122 @@ function exportSchedule(tournamentName: string, matches: Match[], courts: Court[
       a.round - b.round ||
       a.match_number - b.match_number
     )
-    .map((match) => ({
-      'Stage': match.stage,
-      'Bracket / Tier': match.bracket_type,
-      'Round': match.round,
-      'Game Number': match.game_number ?? match.match_number,
-      'Team 1': match.team1_name ?? 'TBD',
-      'Team 2': match.team2_name ?? 'TBD',
-      'Court': match.court_id ? courtNames.get(match.court_id) ?? '' : '',
-      'Scheduled Time': match.scheduled_time ?? '',
-      'Status': match.status,
-      'Score': formatScore(match.score_json),
-      'Winner': match.winner_id === match.team1_id ? match.team1_name ?? '' : match.winner_id === match.team2_id ? match.team2_name ?? '' : '',
-    }));
+    .map((match) => {
+      const score = splitScoreColumns(match.score_json);
+      return {
+        'Match ID': match.id,
+        'Stage': match.stage,
+        'Group': groupLabel(match),
+        'Bracket / Tier': match.bracket_type,
+        'Round': match.round,
+        'Game Number': match.game_number ?? match.match_number,
+        'Team 1': match.team1_name ?? 'TBD',
+        'Team 2': match.team2_name ?? 'TBD',
+        'Court': match.court_id ? courtNames.get(match.court_id) ?? '' : '',
+        'Scheduled Time': match.scheduled_time ?? '',
+        'Status': match.status,
+        'Team 1 Score': score.team1,
+        'Team 2 Score': score.team2,
+        'Winner': match.winner_id === match.team1_id ? match.team1_name ?? '' : match.winner_id === match.team2_id ? match.team2_name ?? '' : '',
+      };
+    });
 
   const worksheet = XLSX.utils.json_to_sheet(rows);
   worksheet['!cols'] = [
-    { wch: 8 }, { wch: 16 }, { wch: 8 }, { wch: 12 }, { wch: 28 }, { wch: 28 },
-    { wch: 16 }, { wch: 20 }, { wch: 14 }, { wch: 14 }, { wch: 28 },
+    { wch: 10 }, { wch: 8 }, { wch: 14 }, { wch: 16 }, { wch: 8 }, { wch: 12 }, { wch: 28 }, { wch: 28 },
+    { wch: 16 }, { wch: 20 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 28 },
   ];
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Schedule');
   const safeName = tournamentName.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'tournament';
   XLSX.writeFile(workbook, `${safeName}-schedule.xlsx`);
+}
+
+interface ImportResult {
+  updated: number;
+  skipped: number;
+  errors: string[];
+}
+
+// Multiple games per match round-trip as comma-joined scores (e.g. "11, 11" vs "8, 9"),
+// matching the comma-separated format written by splitScoreColumns on export.
+async function importScheduleScores(file: File, matches: Match[]): Promise<ImportResult> {
+  const buffer = await file.arrayBuffer();
+  const workbook = XLSX.read(buffer, { type: 'array' });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
+
+  const matchById = new Map(matches.map((m) => [m.id, m]));
+  const result: ImportResult = { updated: 0, skipped: 0, errors: [] };
+
+  for (const row of rows) {
+    const matchId = Number(row['Match ID']);
+    if (!Number.isInteger(matchId)) {
+      result.errors.push('Row missing a valid Match ID — skipped');
+      continue;
+    }
+    const match = matchById.get(matchId);
+    if (!match) {
+      result.errors.push(`Match ID ${matchId}: not found — skipped`);
+      continue;
+    }
+
+    const t1Raw = String(row['Team 1 Score'] ?? '').trim();
+    const t2Raw = String(row['Team 2 Score'] ?? '').trim();
+    if (!t1Raw && !t2Raw) {
+      result.skipped++;
+      continue;
+    }
+
+    if (!match.team1_id || !match.team2_id) {
+      result.errors.push(`Match ID ${matchId}: both teams must be set before scoring — skipped`);
+      continue;
+    }
+
+    const t1Parts = t1Raw.split(',').map((s) => s.trim()).filter((s) => s !== '');
+    const t2Parts = t2Raw.split(',').map((s) => s.trim()).filter((s) => s !== '');
+    if (t1Parts.length === 0 || t2Parts.length === 0 || t1Parts.length !== t2Parts.length) {
+      result.errors.push(`Match ID ${matchId}: Team 1 Score and Team 2 Score must have the same number of games`);
+      continue;
+    }
+
+    const games: { team1: number; team2: number }[] = [];
+    let invalid = false;
+    for (let i = 0; i < t1Parts.length; i++) {
+      const a = Number(t1Parts[i]);
+      const b = Number(t2Parts[i]);
+      if (isNaN(a) || isNaN(b) || a < 0 || b < 0) {
+        invalid = true;
+        break;
+      }
+      games.push({ team1: a, team2: b });
+    }
+    if (invalid) {
+      result.errors.push(`Match ID ${matchId}: invalid score value`);
+      continue;
+    }
+
+    const winnerId = computeWinner(games, match.team1_id, match.team2_id);
+    if (winnerId === null) {
+      result.errors.push(`Match ID ${matchId}: scores are tied across games — cannot determine a winner`);
+      continue;
+    }
+
+    const scheduledTime = String(row['Scheduled Time'] ?? '').trim() || match.scheduled_time;
+    if (!scheduledTime) {
+      result.errors.push(`Match ID ${matchId}: scheduled time is mandatory — set it before importing a score`);
+      continue;
+    }
+
+    try {
+      await api.patch(`/api/matches/${matchId}/score`, { games, winner_id: winnerId, scheduled_time: scheduledTime });
+      result.updated++;
+    } catch (err) {
+      result.errors.push(`Match ID ${matchId}: ${err instanceof Error ? err.message : 'failed to save'}`);
+    }
+  }
+
+  return result;
 }
 
 export function AdminTournamentManage() {
@@ -295,6 +416,32 @@ export function AdminTournamentManage() {
       .get<{ tournaments: { id: number }[] }>('/api/tournaments/admin')
       .then((r) => setAccessDenied(!r.tournaments.some((t) => String(t.id) === id)));
   }, [user, id]);
+
+  const [importing, setImporting] = useState(false);
+
+  const handleImportFile = async (file: File) => {
+    setImporting(true);
+    try {
+      const result = await importScheduleScores(file, matches);
+      load();
+      const parts = [`${result.updated} match score(s) updated`];
+      if (result.skipped > 0) parts.push(`${result.skipped} row(s) skipped (no score entered)`);
+      if (result.errors.length > 0) parts.push(`${result.errors.length} error(s): ${result.errors.slice(0, 5).join('; ')}`);
+      setPopup({
+        type: result.errors.length > 0 ? 'error' : 'success',
+        title: 'Import Excel',
+        message: parts.join('. '),
+      });
+    } catch (err) {
+      setPopup({
+        type: 'error',
+        title: 'Import Excel Failed',
+        message: err instanceof Error ? err.message : 'Failed to import file',
+      });
+    } finally {
+      setImporting(false);
+    }
+  };
 
   const runAction = async (
     fn: () => Promise<unknown>,
@@ -974,6 +1121,23 @@ export function AdminTournamentManage() {
           <button type="button" onClick={() => exportSchedule(tournament.name, matches, courts)}>
             Export Excel
           </button>
+          <label
+            className="button"
+            style={{ cursor: importing ? 'not-allowed' : 'pointer', opacity: importing ? 0.7 : 1 }}
+          >
+            {importing ? 'Importing…' : 'Import Excel'}
+            <input
+              type="file"
+              accept=".xlsx,.xls"
+              style={{ display: 'none' }}
+              disabled={importing}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = '';
+                if (file) handleImportFile(file);
+              }}
+            />
+          </label>
         </div>
         <details className="manual-match-panel">
           <summary>Add manual match</summary>
