@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useParams } from 'react-router-dom';
+import * as XLSX from 'xlsx';
 import { api, ApiError } from '../api';
 import { useAuth } from '../context/AuthContext';
 
@@ -110,6 +111,40 @@ function resolveRoundEndTime(storageKey: string, defaultDT: string): string {
   const saved = localStorage.getItem(storageKey);
   if (saved) return saved;
   return defaultDT;
+}
+
+function exportSchedule(tournamentName: string, matches: Match[], courts: Court[]) {
+  const courtNames = new Map(courts.map((court) => [court.id, court.name]));
+  const rows = [...matches]
+    .sort((a, b) =>
+      (a.scheduled_time ?? '').localeCompare(b.scheduled_time ?? '') ||
+      a.stage - b.stage ||
+      a.round - b.round ||
+      a.match_number - b.match_number
+    )
+    .map((match) => ({
+      'Stage': match.stage,
+      'Bracket / Tier': match.bracket_type,
+      'Round': match.round,
+      'Game Number': match.game_number ?? match.match_number,
+      'Team 1': match.team1_name ?? 'TBD',
+      'Team 2': match.team2_name ?? 'TBD',
+      'Court': match.court_id ? courtNames.get(match.court_id) ?? '' : '',
+      'Scheduled Time': match.scheduled_time ?? '',
+      'Status': match.status,
+      'Score': formatScore(match.score_json),
+      'Winner': match.winner_id === match.team1_id ? match.team1_name ?? '' : match.winner_id === match.team2_id ? match.team2_name ?? '' : '',
+    }));
+
+  const worksheet = XLSX.utils.json_to_sheet(rows);
+  worksheet['!cols'] = [
+    { wch: 8 }, { wch: 16 }, { wch: 8 }, { wch: 12 }, { wch: 28 }, { wch: 28 },
+    { wch: 16 }, { wch: 20 }, { wch: 14 }, { wch: 14 }, { wch: 28 },
+  ];
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Schedule');
+  const safeName = tournamentName.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'tournament';
+  XLSX.writeFile(workbook, `${safeName}-schedule.xlsx`);
 }
 
 export function AdminTournamentManage() {
@@ -934,7 +969,12 @@ export function AdminTournamentManage() {
       )}
 
       <section>
-        <h2>Matches</h2>
+        <div className="section-heading admin-matches-heading">
+          <h2>Matches</h2>
+          <button type="button" onClick={() => exportSchedule(tournament.name, matches, courts)}>
+            Export Excel
+          </button>
+        </div>
         <details className="manual-match-panel">
           <summary>Add manual match</summary>
           <form

@@ -62,7 +62,10 @@ export function Home() {
             <p className="eyebrow eyebrow--dark">ON THE CALENDAR</p>
             <h2>Upcoming tournaments</h2>
           </div>
-          <Link to="/tournaments" className="text-link text-link--dark">See all events <span aria-hidden="true">-&gt;</span></Link>
+          <Link to="/tournaments" className="event-directory-link">
+            <span>See all events</span>
+            <span aria-hidden="true">-&gt;</span>
+          </Link>
         </div>
         {tournaments.length > 0 ? (
           <div className="event-grid">
