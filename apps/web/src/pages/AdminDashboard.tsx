@@ -27,29 +27,18 @@ interface Sponsor {
   website_url: string | null;
 }
 
-interface Brochure {
-  id: number;
-  target_type: 'tournament' | 'series';
-  target_id: number;
-  title: string | null;
-  brochure_path: string;
-  target_name: string | null;
-}
-
 export function AdminDashboard() {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const [activeTab, setActiveTab] = useState<'home' | 'create' | 'series' | 'tournaments'>('home');
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
   const [name, setName] = useState('');
   const [competitionType, setCompetitionType] = useState<'single' | 'series' | 'existing_series'>('single');
   const [seriesName, setSeriesName] = useState('');
   const [existingSeriesId, setExistingSeriesId] = useState('');
   const [seriesList, setSeriesList] = useState<CompetitionSeries[]>([]);
-  const [brochures, setBrochures] = useState<Brochure[]>([]);
-  const [brochureTargetType, setBrochureTargetType] = useState<'tournament' | 'series'>('series');
-  const [brochureTargetId, setBrochureTargetId] = useState('');
-  const [brochureTitle, setBrochureTitle] = useState('');
-  const [brochurePath, setBrochurePath] = useState('/Tournament.jpeg');
+  const [heroFile, setHeroFile] = useState<File | null>(null);
+  const [heroPreviewUrl, setHeroPreviewUrl] = useState<string | null>(null);
   const [sponsors, setSponsors] = useState<Sponsor[]>([]);
   const [sponsorName, setSponsorName] = useState('');
   const [sponsorLogoUrl, setSponsorLogoUrl] = useState('');
@@ -57,21 +46,38 @@ export function AdminDashboard() {
   const [format, setFormat] = useState('single_elimination');
   const [startDate, setStartDate] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [contentNotice, setContentNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  useEffect(() => {
+    if (!heroFile) {
+      setHeroPreviewUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(heroFile);
+    setHeroPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [heroFile]);
+
+  useEffect(() => {
+    if (!contentNotice) return;
+    const timer = window.setTimeout(() => setContentNotice(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [contentNotice]);
 
   const load = () => {
     api.get<{ tournaments: Tournament[] }>('/api/tournaments/admin').then((r) => setTournaments(r.tournaments));
     api.get<{ series: CompetitionSeries[] }>('/api/tournaments/admin/series').then((r) => setSeriesList(r.series));
-    api.get<{ brochures: Brochure[]; sponsors: Sponsor[] }>('/api/home-content').then((r) => {
-      setBrochures(r.brochures);
+    api.get<{ sponsors: Sponsor[] }>('/api/home-content').then((r) => {
       setSponsors(r.sponsors);
-    });
-    api.get<{ brochures: Brochure[] }>('/api/admin/home-content/brochures').then((r) => {
-      setBrochures(r.brochures);
     });
   };
   useEffect(() => {
     load();
   }, []);
+
+  useEffect(() => {
+    if (user?.role === 'superuser') setActiveTab('tournaments');
+  }, [user?.role]);
 
   const createTournament = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -125,33 +131,24 @@ export function AdminDashboard() {
     }
   };
 
-  const addBrochure = async (event: React.FormEvent) => {
+  const uploadHero = async (event: React.FormEvent) => {
     event.preventDefault();
     setError(null);
-    if (!brochureTargetId) return setError('Choose a tournament or series for the brochure');
-    try {
-      await api.post('/api/admin/home-content/brochures', {
-        target_type: brochureTargetType,
-        target_id: Number(brochureTargetId),
-        title: brochureTitle || undefined,
-        brochure_path: brochurePath,
-      });
-      setBrochureTargetId('');
-      setBrochureTitle('');
-      const result = await api.get<{ brochures: Brochure[] }>('/api/admin/home-content/brochures');
-      setBrochures(result.brochures);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to add brochure');
+    setContentNotice(null);
+    if (!heroFile) {
+      setContentNotice({ type: 'error', message: 'Choose an image file for the home hero.' });
+      return;
     }
-  };
-
-  const removeBrochure = async (brochure: Brochure) => {
-    if (!window.confirm(`Remove the brochure for ${brochure.target_name}?`)) return;
     try {
-      await api.delete(`/api/admin/home-content/brochures/${brochure.id}`);
-      setBrochures((current) => current.filter((item) => item.id !== brochure.id));
+      const form = new FormData();
+      form.append('file', heroFile);
+      await api.postForm('/api/admin/home-content/hero/upload', form);
+      setHeroFile(null);
+      setContentNotice({ type: 'success', message: 'Home hero image uploaded successfully.' });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to remove brochure');
+      const message = err instanceof ApiError ? err.message : 'Failed to upload home hero';
+      setError(message);
+      setContentNotice({ type: 'error', message });
     }
   };
 
@@ -188,55 +185,77 @@ export function AdminDashboard() {
     <div className="card">
       <h1>Admin: Tournaments</h1>
       {user?.role === 'admin' && <Link to="/admin/users">Manage users</Link>}
-      {user?.role === 'admin' && (
+      <nav className="tab-nav admin-dashboard-tabs" aria-label="Admin dashboard sections">
+        {user?.role === 'admin' && (
+          <button className={`tab-nav-link${activeTab === 'home' ? ' active' : ''}`} onClick={() => setActiveTab('home')}>
+            Home content
+          </button>
+        )}
+        {user?.role !== 'superuser' && (
+          <button className={`tab-nav-link${activeTab === 'create' ? ' active' : ''}`} onClick={() => setActiveTab('create')}>
+            Create tournament
+          </button>
+        )}
+        {user?.role !== 'superuser' && (
+          <button className={`tab-nav-link${activeTab === 'series' ? ' active' : ''}`} onClick={() => setActiveTab('series')}>
+            Tournament series
+          </button>
+        )}
+        <button className={`tab-nav-link${activeTab === 'tournaments' ? ' active' : ''}`} onClick={() => setActiveTab('tournaments')}>
+          All tournaments
+        </button>
+      </nav>
+
+      {user?.role === 'admin' && activeTab === 'home' && (
         <section className="admin-home-content">
           <h2>Home page content</h2>
-          <h3>Brochures by tournament or series</h3>
-          <ul className="list">
-            {brochures.map((brochure) => (
-              <li key={brochure.id} className="admin-sponsor-row">
-                <span>{brochure.target_type === 'series' ? 'Series' : 'Tournament'}: {brochure.target_name}</span>
-                <small>{brochure.brochure_path}</small>
-                <button type="button" className="button--danger button-sm" onClick={() => removeBrochure(brochure)}>Remove</button>
-              </li>
-            ))}
-            {brochures.length === 0 && <li>No brochures configured.</li>}
-          </ul>
-          <form className="admin-sponsor-form" onSubmit={addBrochure}>
-            <select value={brochureTargetType} onChange={(e) => { setBrochureTargetType(e.target.value as 'tournament' | 'series'); setBrochureTargetId(''); }}>
-              <option value="series">Series brochure</option>
-              <option value="tournament">Tournament brochure</option>
-            </select>
-            <select value={brochureTargetId} onChange={(e) => setBrochureTargetId(e.target.value)} required>
-              <option value="">Select target</option>
-              {(brochureTargetType === 'series' ? seriesList.map((series) => ({ id: series.id, name: series.name })) : tournaments.map((tournament) => ({ id: tournament.id, name: tournament.name }))).map((target) => (
-                <option key={target.id} value={target.id}>{target.name}</option>
-              ))}
-            </select>
-            <input placeholder="Brochure title (optional)" value={brochureTitle} onChange={(e) => setBrochureTitle(e.target.value)} />
-            <input placeholder="File path, e.g. /Tournament.jpeg" value={brochurePath} onChange={(e) => setBrochurePath(e.target.value)} required />
-            <button type="submit">Add brochure</button>
-          </form>
-          <h3>Sponsors</h3>
-          <ul className="list">
-            {sponsors.map((sponsor) => (
-              <li key={sponsor.id} className="admin-sponsor-row">
-                <span>{sponsor.name}</span>
-                <small>{sponsor.website_url || 'No website link'}</small>
-                <button type="button" className="button--danger button-sm" onClick={() => removeSponsor(sponsor)}>Remove</button>
-              </li>
-            ))}
-            {sponsors.length === 0 && <li>No sponsors configured.</li>}
-          </ul>
-          <form className="admin-sponsor-form" onSubmit={addSponsor}>
-            <input placeholder="Sponsor name" value={sponsorName} onChange={(e) => setSponsorName(e.target.value)} required />
-            <input placeholder="Logo URL (optional)" value={sponsorLogoUrl} onChange={(e) => setSponsorLogoUrl(e.target.value)} />
-            <input placeholder="Website URL (optional)" value={sponsorWebsiteUrl} onChange={(e) => setSponsorWebsiteUrl(e.target.value)} />
-            <button type="submit">Add sponsor</button>
-          </form>
+          <div className="admin-home-content__grid">
+            <div className="admin-home-content__upload">
+              <p className="admin-help">Replace the image shown at the top of the Home page.</p>
+              {heroPreviewUrl ? (
+                <img className="admin-home-content__preview" src={heroPreviewUrl} alt="Selected home hero preview" />
+              ) : (
+                <div className="admin-home-content__empty">Choose an image to preview it here.</div>
+              )}
+              <form className="admin-hero-upload-form" onSubmit={uploadHero}>
+                <label className="admin-file-picker">
+                  <span>{heroFile ? heroFile.name : 'Choose hero image'}</span>
+                  <input type="file" accept="image/*" onChange={(e) => setHeroFile(e.target.files?.[0] ?? null)} required />
+                </label>
+                <button type="submit">Upload home image</button>
+              </form>
+              <small className="admin-help">Images up to 8 MB. JPG, PNG, WEBP, and other image formats are supported.</small>
+            </div>
+            <div className="admin-home-content__sponsors">
+              <h3>Sponsors</h3>
+              <ul className="list">
+                {sponsors.map((sponsor) => (
+                  <li key={sponsor.id} className="admin-sponsor-row">
+                    <span>{sponsor.name}</span>
+                    <small>{sponsor.website_url || 'No website link'}</small>
+                    <button type="button" className="button--danger button-sm" onClick={() => removeSponsor(sponsor)}>Remove</button>
+                  </li>
+                ))}
+                {sponsors.length === 0 && <li>No sponsors configured.</li>}
+              </ul>
+              <form className="admin-sponsor-form" onSubmit={addSponsor}>
+                <input placeholder="Sponsor name" value={sponsorName} onChange={(e) => setSponsorName(e.target.value)} required />
+                <input placeholder="Logo URL (optional)" value={sponsorLogoUrl} onChange={(e) => setSponsorLogoUrl(e.target.value)} />
+                <input placeholder="Website URL (optional)" value={sponsorWebsiteUrl} onChange={(e) => setSponsorWebsiteUrl(e.target.value)} />
+                <button type="submit">Add sponsor</button>
+              </form>
+            </div>
+          </div>
+          {contentNotice && (
+            <div className={`admin-content-notice admin-content-notice--${contentNotice.type}`} role="status">
+              <strong>{contentNotice.type === 'success' ? 'Uploaded' : 'Upload failed'}</strong>
+              <span>{contentNotice.message}</span>
+              <button type="button" onClick={() => setContentNotice(null)} aria-label="Dismiss notification">×</button>
+            </div>
+          )}
         </section>
       )}
-      {user?.role !== 'superuser' && (
+      {user?.role !== 'superuser' && activeTab === 'create' && (
         <form onSubmit={createTournament}>
           <h3>Create tournament</h3>
           <label>
@@ -300,24 +319,28 @@ export function AdminDashboard() {
         </form>
       )}
 
-      <h2>{user?.role === 'superuser' ? 'Your assigned tournaments' : 'All tournaments'}</h2>
-      <ul className="list">
-        {tournaments.map((t) => (
-          <li key={t.id}>
-            <Link to={`/admin/tournaments/${t.id}`}>{t.name}</Link>
-            <span className="tag">{t.status}</span>
-            {t.competition_type === 'series' && <span className="tag">Series</span>}
-            <button className="button--danger" onClick={() => deleteTournament(t)}>
-              Delete
-            </button>
-          </li>
-        ))}
-      </ul>
+      {activeTab === 'tournaments' && (
+        <>
+          <h2>{user?.role === 'superuser' ? 'Your assigned tournaments' : 'All tournaments'}</h2>
+          <ul className="list">
+            {tournaments.map((t) => (
+              <li key={t.id}>
+                <Link to={`/admin/tournaments/${t.id}`}>{t.name}</Link>
+                <span className="tag">{t.status}</span>
+                {t.competition_type === 'series' && <span className="tag">Series</span>}
+                <button className="button--danger" onClick={() => deleteTournament(t)}>
+                  Delete
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
 
-      {user?.role !== 'superuser' && seriesList.length > 0 && (
+      {activeTab === 'series' && user?.role !== 'superuser' && (
         <section>
           <h2>Tournament series</h2>
-          <ul className="list">
+          {seriesList.length > 0 ? <ul className="list">
             {seriesList.map((series) => (
               <li key={series.id}>
                 <strong>{series.name}</strong>
@@ -350,7 +373,7 @@ export function AdminDashboard() {
                 )}
               </li>
             ))}
-          </ul>
+          </ul> : <p className="empty-state">No tournament series created yet.</p>}
         </section>
       )}
     </div>

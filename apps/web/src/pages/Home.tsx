@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api } from '../api';
+import { api, API_URL } from '../api';
 
 interface Tournament {
   id: number;
@@ -18,15 +18,6 @@ interface Sponsor {
   website_url: string | null;
 }
 
-interface Brochure {
-  id: number;
-  target_type: 'tournament' | 'series';
-  target_id: number;
-  title: string | null;
-  brochure_path: string;
-  target_name: string | null;
-}
-
 function formatDate(value: string | null) {
   if (!value) return 'Date to be announced';
   const date = new Date(`${value.slice(0, 10)}T00:00:00`);
@@ -35,65 +26,34 @@ function formatDate(value: string | null) {
 
 export function Home() {
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
-  const [brochures, setBrochures] = useState<Brochure[]>([]);
+  const [heroPath, setHeroPath] = useState('/Tournament.jpeg');
   const [sponsors, setSponsors] = useState<Sponsor[]>([]);
 
   useEffect(() => {
     api.get<{ tournaments: Tournament[] }>('/api/tournaments').then((result) => setTournaments(result.tournaments.slice(0, 3)));
-    api.get<{ brochures: Brochure[]; sponsors: Sponsor[] }>('/api/home-content')
+    api.get<{ sponsors: Sponsor[] }>('/api/home-content')
       .then((result) => {
-        setBrochures(result.brochures);
         setSponsors(result.sponsors);
       });
+    api.get<{ path: string; version: string }>('/api/home-content/hero').then((result) => {
+      const imagePath = /^https?:\/\//.test(result.path) ? result.path : `${API_URL}${result.path}`;
+      setHeroPath(`${imagePath}?v=${encodeURIComponent(result.version)}`);
+    });
   }, []);
 
   return (
     <div className="home-page">
       <section className="home-hero">
-        <div className="home-hero__content">
-          <p className="eyebrow">AZTS PICKLEBALL COMMUNITY</p>
-          <h1>Find your next good game.</h1>
-          <p className="home-hero__lede">
-            Follow local tournaments, discover competitive play, and keep every score in one place.
-          </p>
-          <div className="home-hero__actions">
-            <Link to="/tournaments" className="button button--light">Browse tournaments</Link>
-            <Link to="/register" className="text-link">Join the community <span aria-hidden="true">-&gt;</span></Link>
-          </div>
-        </div>
-        <div className="home-hero__note">
-          <span className="hero-note__dot" />
-          <span>Live scores and local play</span>
-        </div>
-      </section>
-
-      <section className="home-intro">
-        <div>
-          <p className="eyebrow eyebrow--dark">PLAY MORE, ORGANIZE LESS</p>
-          <h2>Everything happening on your courts.</h2>
-        </div>
-        <p>From first serve to final standings, AZTS keeps the day moving and the results easy to follow.</p>
-      </section>
-
-      <section className="home-feature-grid" aria-label="Community features">
-        <article className="feature-tile feature-tile--mint">
-          <span className="feature-number">01</span>
-          <h3>Find tournaments</h3>
-          <p>See what is open, what is underway, and where your next bracket starts.</p>
-          <Link to="/tournaments" className="feature-link">Explore events <span aria-hidden="true">-&gt;</span></Link>
-        </article>
-        <article className="feature-tile feature-tile--coral">
-          <span className="feature-number">02</span>
-          <h3>Follow the action</h3>
-          <p>Check schedules, matchups, scores, and standings without missing a point.</p>
-          <span className="feature-mark" aria-hidden="true">+</span>
-        </article>
-        <article className="feature-tile feature-tile--sun">
-          <span className="feature-number">03</span>
-          <h3>Play together</h3>
-          <p>Register your team and make your local pickleball community a little bigger.</p>
-          <Link to="/register" className="feature-link">Create an account <span aria-hidden="true">-&gt;</span></Link>
-        </article>
+        <img
+          className="home-hero__image"
+          src={heroPath}
+          alt="AZTS Pickleball Tournament"
+          onError={(event) => {
+            const image = event.currentTarget;
+            if (image.src.endsWith('/Tournament.jpeg')) return;
+            image.src = '/Tournament.jpeg';
+          }}
+        />
       </section>
 
       <section className="home-events">
@@ -122,23 +82,6 @@ export function Home() {
           <div className="empty-state">New tournaments are on the way. Check back soon.</div>
         )}
       </section>
-
-      {brochures.map((brochure) => (
-        <section className="home-brochure" key={brochure.id}>
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow eyebrow--dark">{brochure.target_type === 'series' ? 'SERIES BROCHURE' : 'TOURNAMENT BROCHURE'}</p>
-              <h2>{brochure.title || brochure.target_name || 'Tournament details'}</h2>
-            </div>
-            <a className="text-link text-link--dark" href={brochure.brochure_path} target="_blank" rel="noreferrer">
-              Open brochure <span aria-hidden="true">-&gt;</span>
-            </a>
-          </div>
-          <a href={brochure.brochure_path} target="_blank" rel="noreferrer" className="home-brochure__frame">
-            <img src={brochure.brochure_path} alt={brochure.title || brochure.target_name || 'Tournament brochure'} />
-          </a>
-        </section>
-      ))}
 
       {sponsors.length > 0 && (
         <section className="home-sponsors" aria-label="Sponsors">

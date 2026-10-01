@@ -9,6 +9,11 @@ database_name = "pickleball_db"
 database_id = "71ed2033-3cf6-4a73-bc17-8b0478508b49"
 migrations_dir = "migrations"
 
+[[r2_buckets]]
+binding = "BROCHURE_BUCKET"
+bucket_name = "azts-pickleball-brochures"
+preview_bucket_name = "azts-pickleball-brochures-preview"
+
 # Set these with: wrangler secret put <NAME>
 # JWT_SECRET            - random 32+ char string, signs session cookies
 # GOOGLE_CLIENT_ID      - OAuth client id from Google Cloud Console
