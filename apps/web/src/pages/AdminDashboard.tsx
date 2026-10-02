@@ -11,6 +11,7 @@ interface Tournament {
   competition_type?: 'single' | 'series';
   series_id?: number | null;
   series_stage?: string | null;
+  series_name?: string | null;
 }
 
 interface CompetitionSeries {
@@ -329,6 +330,7 @@ export function AdminDashboard() {
                   <Link to={`/admin/tournaments/${t.id}`}>{t.name}</Link>
                   <span className="tag">{t.status}</span>
                   {t.competition_type === 'series' && <span className="tag">Series</span>}
+                  {t.series_name && <span className="admin-tournament-row__series">Series: {t.series_name}</span>}
                 </div>
                 <button className="button--danger button-sm admin-tournament-row__delete" onClick={() => deleteTournament(t)}>
                   Delete

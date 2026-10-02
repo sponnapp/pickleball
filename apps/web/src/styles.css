@@ -615,6 +615,11 @@ button.button--danger:hover,
   gap: 4px;
   min-width: 0;
 }
+.admin-tournament-row__series {
+  flex-basis: 100%;
+  color: #68766f;
+  font-size: 0.82rem;
+}
 .admin-tournament-row__delete {
   flex-shrink: 0;
   margin: 0;
