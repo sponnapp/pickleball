@@ -20,7 +20,7 @@ preview_bucket_name = "azts-pickleball-brochures-preview"
 
 [vars]
 # Non-secret public config can go here
-APP_URL = "https://pickleball-8ky.pages.dev"
+APP_URL = "https://aztspickleball.com"
 
 [observability]
 enabled = true
