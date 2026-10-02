@@ -247,7 +247,7 @@ matchRoutes.get('/tournaments/:tournamentId/matches', async (c) => {
   const gameNumberByMatch = new Map(roundOnePoolMatches.map((match, index) => [match.id, index + 1]));
   const matches = results.map((match) => ({
     ...match,
-    game_number: gameNumberByMatch.get(match.id) ?? match.match_number,
+    game_number: match.game_number ?? gameNumberByMatch.get(match.id) ?? match.match_number,
   }));
 
   return c.json({ matches });
@@ -875,7 +875,13 @@ matchRoutes.get('/tournaments/:tournamentId/tier-results', async (c) => {
 matchRoutes.patch('/matches/:id', requireAdmin, requireTournamentManager((c) => resolveMatchTournamentId(c.env.DB, c.req.param('id'))), async (c) => {
   const id = c.req.param('id');
   const body = await c.req.json<Record<string, unknown>>();
-  const allowed = ['court_id', 'scheduled_time', 'status', 'team1_id', 'team2_id'];
+  if (
+    'game_number' in body &&
+    (typeof body.game_number !== 'number' || !Number.isInteger(body.game_number) || body.game_number < 1)
+  ) {
+    return c.json({ error: 'Game number must be a positive whole number' }, 400);
+  }
+  const allowed = ['court_id', 'scheduled_time', 'status', 'team1_id', 'team2_id', 'game_number'];
   const fields = Object.keys(body).filter((k) => allowed.includes(k));
   if (fields.length === 0) return c.json({ error: 'No valid fields to update' }, 400);
 

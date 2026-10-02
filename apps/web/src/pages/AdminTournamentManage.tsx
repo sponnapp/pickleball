@@ -1505,13 +1505,16 @@ function MatchRow({ match, courts, onChange }: { match: Match; courts: Court[]; 
     const parsed = parseScoreJson(match.score_json);
     return parsed.length > 0 ? parsed : [{ team1: '', team2: '' }];
   });
+  const [gameNumber, setGameNumber] = useState(String(match.game_number ?? match.match_number));
+  const [gameNumberError, setGameNumberError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setTime(match.scheduled_time ?? '');
+    setGameNumber(String(match.game_number ?? match.match_number));
     const parsed = parseScoreJson(match.score_json);
     setGames(parsed.length > 0 ? parsed : [{ team1: '', team2: '' }]);
-  }, [match.scheduled_time, match.score_json, match.winner_id]);
+  }, [match.scheduled_time, match.score_json, match.winner_id, match.game_number, match.match_number]);
 
   const canScore = Boolean(match.team1_id && match.team2_id);
   const isFormOpen = canScore && (match.status !== 'completed' || isEditing);
@@ -1604,7 +1607,36 @@ function MatchRow({ match, courts, onChange }: { match: Match; courts: Court[]; 
         )}
       </td>
       <td>{match.round}</td>
-      <td>{match.game_number ?? match.match_number}</td>
+      <td>
+        <input
+          className="match-number-input"
+          type="number"
+          min={1}
+          step={1}
+          aria-label={`Game number for ${match.team1_name ?? 'TBD'} vs ${match.team2_name ?? 'TBD'}`}
+          value={gameNumber}
+          onChange={(e) => setGameNumber(e.target.value)}
+          onBlur={async () => {
+            const value = Number(gameNumber);
+            if (!Number.isInteger(value) || value < 1) {
+              setGameNumberError('Use a positive whole number');
+              return;
+            }
+            if (value === (match.game_number ?? match.match_number)) {
+              setGameNumberError(null);
+              return;
+            }
+            try {
+              await api.patch(`/api/matches/${match.id}`, { game_number: value });
+              setGameNumberError(null);
+              onChange();
+            } catch (err) {
+              setGameNumberError(err instanceof Error ? err.message : 'Failed to save game number');
+            }
+          }}
+        />
+        {gameNumberError && <small className="error">{gameNumberError}</small>}
+      </td>
       <td>
         <span className="match-teams">
           <span>{match.team1_name ?? 'TBD'}</span>

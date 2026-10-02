@@ -733,6 +733,12 @@ button.button--danger:hover,
   box-sizing: border-box;
 }
 
+.table .match-number-input {
+  width: 4.5rem;
+  min-width: 4rem;
+  text-align: center;
+}
+
 .table input[type="datetime-local"] {
   width: 175px;
   font-size: 0.8rem;
