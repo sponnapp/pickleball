@@ -88,14 +88,31 @@ export function Home() {
 
       {sponsors.length > 0 && (
         <section className="home-sponsors" aria-label="Sponsors">
-          <p className="eyebrow eyebrow--dark">COMMUNITY PARTNERS</p>
+          <div className="home-sponsors__heading">
+            <p className="eyebrow eyebrow--dark">WITH THANKS</p>
+            <h2>Our community partners</h2>
+          </div>
           <div className="home-sponsors__grid">
             {sponsors.map((sponsor) => {
-              const content = sponsor.logo_url ? <img src={sponsor.logo_url} alt={sponsor.name} /> : <strong>{sponsor.name}</strong>;
+              const content = (
+                <>
+                  <span className="home-sponsor__identity">
+                      {sponsor.logo_url ? (
+                        <img
+                          src={/^https?:\/\//.test(sponsor.logo_url) ? sponsor.logo_url : `${API_URL}${sponsor.logo_url}`}
+                          alt={sponsor.name}
+                        />
+                      ) : (
+                        <strong>{sponsor.name}</strong>
+                      )}
+                  </span>
+                  {sponsor.website_url && <span className="home-sponsor__arrow" aria-hidden="true">↗</span>}
+                </>
+              );
               return sponsor.website_url ? (
-                <a key={sponsor.id} href={sponsor.website_url} target="_blank" rel="noreferrer" title={sponsor.name}>{content}</a>
+                <a className="home-sponsor" key={sponsor.id} href={sponsor.website_url} target="_blank" rel="noreferrer" title={sponsor.name}>{content}</a>
               ) : (
-                <div key={sponsor.id} title={sponsor.name}>{content}</div>
+                <div className="home-sponsor" key={sponsor.id} title={sponsor.name}>{content}</div>
               );
             })}
           </div>

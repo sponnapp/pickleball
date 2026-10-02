@@ -40,6 +40,20 @@ homeRoutes.get('/home-content/brochures/:id/file', async (c) => {
   return new Response(object.body, { headers });
 });
 
+homeRoutes.get('/home-content/sponsors/:id/logo', async (c) => {
+  const sponsor = await c.env.DB.prepare('SELECT logo_url FROM homepage_sponsors WHERE id = ?')
+    .bind(c.req.param('id'))
+    .first<{ logo_url: string | null }>();
+  if (!sponsor?.logo_url?.startsWith('sponsors/')) return c.notFound();
+  const object = await c.env.BROCHURE_BUCKET.get(sponsor.logo_url);
+  if (!object) return c.notFound();
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set('etag', object.httpEtag);
+  headers.set('cache-control', 'public, max-age=31536000, immutable');
+  return new Response(object.body, { headers });
+});
+
 homeRoutes.get('/home-content', async (c) => {
   const { results: brochures } = await c.env.DB.prepare(
     `SELECT b.id, b.target_type, b.target_id, b.title, b.brochure_path, b.visible,
@@ -60,7 +74,12 @@ homeRoutes.get('/home-content', async (c) => {
         ? `/api/home-content/brochures/${brochure.id}/file`
         : brochure.brochure_path,
     })),
-    sponsors,
+    sponsors: sponsors.map((sponsor) => ({
+      ...sponsor,
+      logo_url: String(sponsor.logo_url ?? '').startsWith('sponsors/')
+        ? `/api/home-content/sponsors/${sponsor.id}/logo`
+        : sponsor.logo_url,
+    })),
   });
 });
 
@@ -173,10 +192,46 @@ homeRoutes.post('/admin/home-content/sponsors', requireSuperAdmin, async (c) => 
   return c.json({ sponsor }, 201);
 });
 
+homeRoutes.post('/admin/home-content/sponsors/upload', requireSuperAdmin, async (c) => {
+  const form = await c.req.formData();
+  const name = form.get('name');
+  const websiteUrl = form.get('website_url');
+  const fileEntry = form.get('file');
+  if (typeof name !== 'string' || !name.trim() || !fileEntry || typeof fileEntry === 'string') {
+    return c.json({ error: 'Sponsor name and an image file are required' }, 400);
+  }
+  const file = fileEntry as unknown as { type: string; size: number; stream: () => ReadableStream };
+  const allowedTypes = ['image/png', 'image/jpeg', 'image/webp'];
+  if (!allowedTypes.includes(file.type)) {
+    return c.json({ error: 'Sponsor logo must be a PNG, JPG, or WebP image' }, 400);
+  }
+  if (file.size > 5 * 1024 * 1024) return c.json({ error: 'Sponsor logo must be 5 MB or smaller' }, 400);
+
+  const maxOrder = await c.env.DB.prepare('SELECT COALESCE(MAX(display_order), -1) AS value FROM homepage_sponsors')
+    .first<{ value: number }>();
+  const objectKey = `sponsors/${crypto.randomUUID()}`;
+  await c.env.BROCHURE_BUCKET.put(objectKey, file.stream(), {
+    httpMetadata: { contentType: file.type, cacheControl: 'public, max-age=31536000, immutable' },
+  });
+  try {
+    const sponsor = await c.env.DB.prepare(
+      'INSERT INTO homepage_sponsors (name, logo_url, website_url, display_order) VALUES (?, ?, ?, ?) RETURNING *'
+    ).bind(name.trim(), objectKey, typeof websiteUrl === 'string' ? websiteUrl.trim() || null : null, (maxOrder?.value ?? -1) + 1).first();
+    return c.json({ sponsor }, 201);
+  } catch (error) {
+    await c.env.BROCHURE_BUCKET.delete(objectKey);
+    throw error;
+  }
+});
+
 homeRoutes.delete('/admin/home-content/sponsors/:id', requireSuperAdmin, async (c) => {
   const id = Number(c.req.param('id'));
   if (!Number.isInteger(id) || id < 1) return c.json({ error: 'Invalid sponsor id' }, 400);
+  const sponsor = await c.env.DB.prepare('SELECT logo_url FROM homepage_sponsors WHERE id = ?')
+    .bind(id)
+    .first<{ logo_url: string | null }>();
   const result = await c.env.DB.prepare('DELETE FROM homepage_sponsors WHERE id = ?').bind(id).run();
   if (!result.meta.changes) return c.json({ error: 'Sponsor not found' }, 404);
+  if (sponsor?.logo_url?.startsWith('sponsors/')) await c.env.BROCHURE_BUCKET.delete(sponsor.logo_url);
   return c.json({ ok: true });
 });

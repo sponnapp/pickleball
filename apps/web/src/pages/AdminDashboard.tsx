@@ -43,7 +43,10 @@ export function AdminDashboard() {
   const [sponsors, setSponsors] = useState<Sponsor[]>([]);
   const [sponsorName, setSponsorName] = useState('');
   const [sponsorLogoUrl, setSponsorLogoUrl] = useState('');
+  const [sponsorLogoFile, setSponsorLogoFile] = useState<File | null>(null);
+  const [sponsorLogoPreviewUrl, setSponsorLogoPreviewUrl] = useState<string | null>(null);
   const [sponsorWebsiteUrl, setSponsorWebsiteUrl] = useState('');
+  const [sponsorUploading, setSponsorUploading] = useState(false);
   const [format, setFormat] = useState('single_elimination');
   const [startDate, setStartDate] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -58,6 +61,16 @@ export function AdminDashboard() {
     setHeroPreviewUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [heroFile]);
+
+  useEffect(() => {
+    if (!sponsorLogoFile) {
+      setSponsorLogoPreviewUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(sponsorLogoFile);
+    setSponsorLogoPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [sponsorLogoFile]);
 
   useEffect(() => {
     if (!contentNotice) return;
@@ -156,19 +169,31 @@ export function AdminDashboard() {
   const addSponsor = async (event: React.FormEvent) => {
     event.preventDefault();
     setError(null);
+    setSponsorUploading(true);
     try {
-      await api.post('/api/admin/home-content/sponsors', {
-        name: sponsorName,
-        logo_url: sponsorLogoUrl || undefined,
-        website_url: sponsorWebsiteUrl || undefined,
-      });
+      if (sponsorLogoFile) {
+        const form = new FormData();
+        form.append('name', sponsorName);
+        form.append('website_url', sponsorWebsiteUrl);
+        form.append('file', sponsorLogoFile);
+        await api.postForm('/api/admin/home-content/sponsors/upload', form);
+      } else {
+        await api.post('/api/admin/home-content/sponsors', {
+          name: sponsorName,
+          logo_url: sponsorLogoUrl || undefined,
+          website_url: sponsorWebsiteUrl || undefined,
+        });
+      }
       setSponsorName('');
       setSponsorLogoUrl('');
+      setSponsorLogoFile(null);
       setSponsorWebsiteUrl('');
       const result = await api.get<{ sponsors: Sponsor[] }>('/api/home-content');
       setSponsors(result.sponsors);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to add sponsor');
+    } finally {
+      setSponsorUploading(false);
     }
   };
 
@@ -263,7 +288,25 @@ export function AdminDashboard() {
                 <input placeholder="Sponsor name" value={sponsorName} onChange={(e) => setSponsorName(e.target.value)} required />
                 <input placeholder="Logo URL (optional)" value={sponsorLogoUrl} onChange={(e) => setSponsorLogoUrl(e.target.value)} />
                 <input placeholder="Website URL (optional)" value={sponsorWebsiteUrl} onChange={(e) => setSponsorWebsiteUrl(e.target.value)} />
-                <button type="submit">Add sponsor</button>
+                <label className="admin-file-picker admin-sponsor-file-picker">
+                  <span>{sponsorLogoFile?.name ?? 'Choose logo image'}</span>
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
+                    onChange={(e) => setSponsorLogoFile(e.target.files?.[0] ?? null)}
+                  />
+                </label>
+                <div className="admin-sponsor-preview" aria-label="Logo preview, scaled to fit partner tiles">
+                  {sponsorLogoPreviewUrl ? (
+                    <img src={sponsorLogoPreviewUrl} alt="Selected sponsor logo preview" />
+                  ) : (
+                    <span>Logo preview</span>
+                  )}
+                </div>
+                <small className="admin-sponsor-help">PNG, JPG, or WebP, up to 5 MB. Uploaded logo takes priority over the logo URL.</small>
+                <button type="submit" disabled={sponsorUploading}>
+                  {sponsorUploading ? 'Uploading…' : 'Add sponsor'}
+                </button>
               </form>
             </div>
           </div>
