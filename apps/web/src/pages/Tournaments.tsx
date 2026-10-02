@@ -58,9 +58,13 @@ export function Tournaments() {
     };
   }).filter((series) => series.events.length > 0);
   const directoryItems = [
-    ...standaloneTournaments.map((tournament) => ({ kind: 'single' as const, tournament, sortDate: tournament.start_date ?? '' })),
-    ...visibleSeries.map((series) => ({ kind: 'series' as const, series, sortDate: series.sortDate })),
-  ].sort((a, b) => b.sortDate.localeCompare(a.sortDate));
+    ...visibleSeries
+      .sort((a, b) => a.seriesName.localeCompare(b.seriesName))
+      .map((series) => ({ kind: 'series' as const, series })),
+    ...standaloneTournaments
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((tournament) => ({ kind: 'single' as const, tournament })),
+  ];
 
   const stageLabel = (stage: Tournament['series_stage']) => {
     if (stage === 'playoffs') return 'Playoffs';
