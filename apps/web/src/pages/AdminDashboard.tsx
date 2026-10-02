@@ -182,6 +182,26 @@ export function AdminDashboard() {
     }
   };
 
+  const sortedTournaments = [...tournaments].sort((a, b) => {
+    const aIsSeries = a.series_id != null;
+    const bIsSeries = b.series_id != null;
+    if (aIsSeries !== bIsSeries) return aIsSeries ? -1 : 1;
+
+    if (aIsSeries && bIsSeries) {
+      const seriesNameOrder = (a.series_name ?? '').localeCompare(b.series_name ?? '');
+      if (seriesNameOrder !== 0) return seriesNameOrder;
+      const stageOrder = (stage: string | null | undefined) => {
+        if (stage === 'playoffs') return Number.MAX_SAFE_INTEGER;
+        const qualifierNumber = Number(stage?.match(/^qualifier_(\d+)$/)?.[1]);
+        return Number.isFinite(qualifierNumber) && qualifierNumber > 0 ? qualifierNumber : 0;
+      };
+      const stageDifference = stageOrder(a.series_stage) - stageOrder(b.series_stage);
+      if (stageDifference !== 0) return stageDifference;
+    }
+
+    return a.name.localeCompare(b.name);
+  });
+
   return (
     <div className="card">
       <h1>Admin: Tournaments</h1>
@@ -324,7 +344,7 @@ export function AdminDashboard() {
         <>
           <h2>{user?.role === 'superuser' ? 'Your assigned tournaments' : 'All tournaments'}</h2>
           <ul className="list admin-tournament-list">
-            {tournaments.map((t) => (
+            {sortedTournaments.map((t) => (
               <li key={t.id} className="admin-tournament-row">
                 <div className="admin-tournament-row__info">
                   <Link to={`/admin/tournaments/${t.id}`}>{t.name}</Link>
