@@ -53,6 +53,8 @@ interface PlayoffMatch {
   stage: number;
   round: number;
   matchNumber: number;
+  nextMatchId: number | null;
+  nextMatchSlot: number | null;
   roundLabel: string;
   isFinal: boolean;
   isSemi: boolean;
@@ -61,6 +63,7 @@ interface PlayoffMatch {
   team2Name: string | null;
   winnerName: string | null;
   loserName: string | null;
+  winnerPointDifferential: number | null;
   score: string;
   status: string;
 }
@@ -71,6 +74,134 @@ interface TierResult {
   winner: string | null;
   runnerUp: string | null;
   matches?: PlayoffMatch[];
+}
+
+interface PlayoffTreeNode {
+  match: PlayoffMatch;
+  feeders: (PlayoffTreeNode | null)[];
+}
+
+function buildPlayoffTrees(matches: PlayoffMatch[]): PlayoffTreeNode[] {
+  const nodes = new Map(matches.map((match) => [match.id, { match, feeders: [null, null] } as PlayoffTreeNode]));
+  const childIds = new Set<number>();
+
+  for (const match of matches) {
+    if (!match.nextMatchId) continue;
+    const parent = nodes.get(match.nextMatchId);
+    if (!parent) continue;
+    const slot = match.nextMatchSlot === 1 || match.nextMatchSlot === 2
+      ? match.nextMatchSlot - 1
+      : parent.feeders.findIndex((feeder) => feeder === null);
+    if (slot < 0 || slot > 1) continue;
+    parent.feeders[slot] = nodes.get(match.id)!;
+    childIds.add(match.id);
+  }
+
+  return matches
+    .filter((match) => !childIds.has(match.id))
+    .sort((a, b) => a.stage - b.stage || a.round - b.round || a.matchNumber - b.matchNumber)
+    .map((match) => nodes.get(match.id)!);
+}
+
+function PlayoffTreeMatch({ node }: { node: PlayoffTreeNode }) {
+  const { match } = node;
+  const feeders = node.feeders.filter((feeder): feeder is PlayoffTreeNode => feeder !== null);
+  const statusLabel = match.status === 'completed' ? 'Final' : match.status === 'in_progress' ? 'Live' : 'Scheduled';
+  const statusClass = match.status === 'completed' ? 'completed' : match.status === 'in_progress' ? 'live' : 'scheduled';
+
+  return (
+    <div className={`playoff-tree__node${feeders.length > 0 ? ' has-feeders' : ''}`}>
+      {feeders.length > 0 && (
+        <div className={`playoff-tree__feeders${feeders.length > 1 ? ' has-pair' : ''}`}>
+          {feeders.map((feeder) => <PlayoffTreeMatch key={feeder.match.id} node={feeder} />)}
+        </div>
+      )}
+      <article className={`playoff-tree-match${match.isFinal ? ' is-final' : ''}`}>
+        <div className="playoff-tree-match__heading">
+          <span>{match.roundLabel}</span>
+          <span className={`playoff-tree-match__status is-${statusClass}`}>{statusLabel}</span>
+        </div>
+        <div className={`playoff-tree-match__team${match.winnerName && match.winnerName === match.team1Name ? ' is-winner' : ''}`}>
+          <span>{match.team1Name || 'TBD'}</span>
+        </div>
+        <div className={`playoff-tree-match__team${match.winnerName && match.winnerName === match.team2Name ? ' is-winner' : ''}`}>
+          <span>{match.team2Name || 'TBD'}</span>
+        </div>
+        {match.score && <div className="playoff-tree-match__score">{match.score}</div>}
+      </article>
+    </div>
+  );
+}
+
+function PlayoffReseedPreview({ matches }: { matches: PlayoffMatch[] }) {
+  const openingMatches = matches.filter((match) => match.stage === 2).sort((a, b) => a.matchNumber - b.matchNumber);
+  const rankedWinners = openingMatches
+    .filter((match) => match.status === 'completed' && match.winnerName && match.winnerPointDifferential !== null)
+    .sort((a, b) =>
+      b.winnerPointDifferential! - a.winnerPointDifferential! || a.matchNumber - b.matchNumber
+    )
+    .map((match) => match.winnerName!);
+  const seededName = (seed: number) => `Seed ${seed}: ${rankedWinners[seed - 1] ?? 'TBD'}`;
+  const projectedMatch = (
+    id: number,
+    stage: number,
+    matchNumber: number,
+    roundLabel: string,
+    team1Name: string,
+    team2Name: string,
+    isFinal = false,
+    isSemi = false
+  ): PlayoffTreeNode => ({
+    match: {
+      id,
+      stage,
+      round: 1,
+      matchNumber,
+      nextMatchId: null,
+      nextMatchSlot: null,
+      roundLabel,
+      isFinal,
+      isSemi,
+      team1Name,
+      team2Name,
+      winnerName: null,
+      loserName: null,
+      winnerPointDifferential: null,
+      score: '',
+      status: 'scheduled',
+    },
+    feeders: [null, null],
+  });
+
+  return (
+    <div className="playoff-reseed-preview">
+      <div className="playoff-reseed-preview__round">
+        <h4>Qualifier matches</h4>
+        <div className="playoff-reseed-preview__qualifiers">
+          {openingMatches.map((match) => (
+            <PlayoffTreeMatch key={match.id} node={{ match, feeders: [null, null] }} />
+          ))}
+        </div>
+        </div>
+        <div className="playoff-reseed-preview__round">
+        <div className="playoff-reseed-preview__rule">
+            <strong>Provisional seeds: {rankedWinners.length} of 4 qualifier winners</strong>
+            <span>Ranked by point differential; ties retain qualifier match order</span>
+        </div>
+        <h4>Semifinals</h4>
+        <div className="playoff-reseed-preview__semifinals">
+            <PlayoffTreeMatch node={projectedMatch(-2, 3, 1, 'Semifinal 1', seededName(1), seededName(3), false, true)} />
+            <PlayoffTreeMatch node={projectedMatch(-3, 3, 2, 'Semifinal 2', seededName(2), seededName(4), false, true)} />
+        </div>
+        </div>
+        <div className="playoff-reseed-preview__round">
+        <h4>Final</h4>
+        <div className="playoff-reseed-preview__final">
+          <PlayoffTreeMatch node={projectedMatch(-4, 4, 1, 'Final', 'Winner Semifinal 1', 'Winner Semifinal 2', true)} />
+        </div>
+        </div>
+    </div>
+  );
 }
 
 const TIER_ORDER: ('platinum' | 'gold' | 'silver' | 'bronze')[] = ['platinum', 'gold', 'silver', 'bronze'];
@@ -203,7 +334,8 @@ export function TournamentDetail() {
   const [standings, setStandings] = useState<Standing[]>([]);
   const [tierStandings, setTierStandings] = useState<Standing[]>([]);
   const [tierResults, setTierResults] = useState<TierResult[]>([]);
-  const [view, setView] = useState<'all' | 'standings' | 'schedule'>('all');
+  const [view, setView] = useState<'all' | 'standings' | 'schedule' | 'bracket'>('all');
+  const [allPlayoffSection, setAllPlayoffSection] = useState<'bracket' | 'schedule'>('bracket');
   const [teamName, setTeamName] = useState('');
   const [player1, setPlayer1] = useState('');
   const [player2, setPlayer2] = useState('');
@@ -236,6 +368,20 @@ export function TournamentDetail() {
   };
 
   useEffect(load, [id]);
+
+  useEffect(() => {
+    const bracketIsVisible = view === 'bracket' || (view === 'all' && allPlayoffSection === 'bracket');
+    if (tournament?.series_stage !== 'playoffs' || !bracketIsVisible) return;
+
+    const refreshTierResults = () => {
+      api
+        .get<{ tierResults: TierResult[] }>(`/api/tournaments/${id}/tier-results`)
+        .then((result) => setTierResults(result.tierResults))
+        .catch(() => undefined);
+    };
+    const intervalId = window.setInterval(refreshTierResults, 2500);
+    return () => window.clearInterval(intervalId);
+  }, [id, tournament?.series_stage, view, allPlayoffSection]);
 
   useEffect(() => {
     const groupKeys = new Set(
@@ -318,6 +464,11 @@ export function TournamentDetail() {
         >
           Standings
         </button>
+        {tournament.series_stage === 'playoffs' && (
+          <button className={`tab-nav-link${view === 'bracket' ? ' active' : ''}`} onClick={() => setView('bracket')}>
+            Bracket
+          </button>
+        )}
         <button className={`tab-nav-link${view === 'schedule' ? ' active' : ''}`} onClick={() => setView('schedule')}>
           Schedule
         </button>
@@ -489,131 +640,75 @@ export function TournamentDetail() {
         </>
       )}
 
-      {(view === 'all' || view === 'standings') && tierResults.length > 0 && (
+      {view === 'all' && tournament.series_stage === 'playoffs' && (
+        <nav className="tab-nav playoff-content-tabs" aria-label="Playoff content">
+          <button
+            className={`tab-nav-link${allPlayoffSection === 'bracket' ? ' active' : ''}`}
+            onClick={() => setAllPlayoffSection('bracket')}
+          >
+            Round 3 &amp; 4 — Playoff Brackets
+          </button>
+          <button
+            className={`tab-nav-link${allPlayoffSection === 'schedule' ? ' active' : ''}`}
+            onClick={() => setAllPlayoffSection('schedule')}
+          >
+            Schedule &amp; Matches
+          </button>
+        </nav>
+      )}
+
+      {(view === 'standings' || view === 'bracket' ||
+        (view === 'all' && (tournament.series_stage !== 'playoffs' || allPlayoffSection === 'bracket'))) &&
+        tierResults.length > 0 && (
         <>
-          <h2>Round 3 &amp; 4 — Playoff Results</h2>
-          <div className="table-container">
-            <table className="table table--wide">
-              <thead>
-                <tr>
-                  <th>Tier</th>
-                  <th>Round</th>
-                  <th>Matchup</th>
-                  <th>Winner / Result</th>
-                  <th>Score</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {TIER_ORDER.filter((tier) => tierResults.some((r) => r.tier === tier)).map((tier) => {
-                  const r = tierResults.find((x) => x.tier === tier)!;
-                  const tierMatches = r.matches && r.matches.length > 0 ? r.matches : null;
+          <h2>Round 3 &amp; 4 — Playoff Brackets</h2>
+          <div className="playoff-brackets">
+            {TIER_ORDER.filter((tier) => tierResults.some((result) => result.tier === tier)).map((tier) => {
+              const result = tierResults.find((item) => item.tier === tier)!;
+              const tierMatches = result.matches ?? [];
+              const hasGeneratedStages = tierMatches.some((match) => match.stage >= 3);
+              const hasFourOpeningMatches = tierMatches.filter((match) => match.stage === 2).length === 4;
+              const showReseedPreview = tournament.series_stage === 'playoffs' && !hasGeneratedStages && hasFourOpeningMatches;
+              const trees = buildPlayoffTrees(tierMatches);
 
-                  if (!tierMatches) {
-                    return (
-                      <tr key={r.tier}>
-                        <td>
-                          <span className={`tier-badge tier-badge--${r.tier}`}>{r.tier}</span>
-                        </td>
-                        <td>
-                          <span className="tag tag--final">Final</span>
-                        </td>
-                        <td>TBD vs TBD</td>
-                        <td>
-                          {r.completed ? (
-                            <div>
-                              <strong>🥇 {r.winner}</strong> (1st)
-                              {r.runnerUp && (
-                                <div style={{ fontSize: '0.88em', opacity: 0.85, marginTop: '2px' }}>
-                                  🥈 {r.runnerUp} (2nd)
-                                </div>
-                              )}
-                            </div>
-                          ) : (
-                            <span style={{ opacity: 0.6 }}>TBD</span>
-                          )}
-                        </td>
-                        <td>-</td>
-                        <td>
-                          <span className={`tag ${r.completed ? '' : 'tag--outline'}`}>
-                            {r.completed ? 'Final' : 'Scheduled'}
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  }
-
-                  return tierMatches.map((m, idx) => (
-                    <tr
-                      key={`${r.tier}-${m.id || idx}`}
-                      className={m.isFinal ? 'playoff-final-row' : m.isSemi ? 'playoff-semi-row' : ''}
-                    >
-                      {idx === 0 ? (
-                        <td rowSpan={tierMatches.length} style={{ verticalAlign: 'top', paddingTop: '0.8rem' }}>
-                          <span className={`tier-badge tier-badge--${r.tier}`}>{r.tier}</span>
-                        </td>
-                      ) : null}
-                      <td>
-                        <span className={`tag ${m.isFinal ? 'tag--final' : m.isSemi ? 'tag--semi' : ''}`}>
-                          {m.roundLabel}
-                        </span>
-                      </td>
-                      <td>
-                        <strong>{m.team1Name || 'TBD'}</strong>{' '}
-                        <span style={{ opacity: 0.5, padding: '0 2px' }}>vs</span>{' '}
-                        <strong>{m.team2Name || 'TBD'}</strong>
-                      </td>
-                      <td>
-                        {m.status === 'completed' && m.winnerName ? (
-                          m.isFinal ? (
-                            <div>
-                              <strong style={{ color: '#146c43' }}>🥇 {m.winnerName}</strong> (1st)
-                              {m.loserName && (
-                                <div style={{ fontSize: '0.88em', color: '#555', marginTop: '2px' }}>
-                                  🥈 {m.loserName} (2nd)
-                                </div>
-                              )}
-                            </div>
-                          ) : (
-                            <div>
-                              <strong style={{ color: '#146c43' }}>✓ {m.winnerName}</strong>
-                              {m.loserName && (
-                                <span style={{ fontSize: '0.85em', color: '#666', marginLeft: '6px' }}>
-                                  (d. {m.loserName})
-                                </span>
-                              )}
-                            </div>
-                          )
-                        ) : (
-                          <span style={{ opacity: 0.6 }}>TBD</span>
-                        )}
-                      </td>
-                      <td>
-                        <span style={{ fontWeight: 600 }}>{m.score || '-'}</span>
-                      </td>
-                      <td>
-                        <span
-                          className={`tag ${
-                            m.status === 'completed'
-                              ? ''
-                              : m.status === 'in_progress'
-                              ? 'tag--live'
-                              : 'tag--outline'
-                          }`}
-                        >
-                          {m.status === 'completed' ? 'Final' : m.status === 'in_progress' ? 'Live' : 'Scheduled'}
-                        </span>
-                      </td>
-                    </tr>
-                  ));
-                })}
-              </tbody>
-            </table>
+              return (
+                <section className={`playoff-bracket playoff-bracket--${result.tier}`} key={result.tier}>
+                  <header className="playoff-bracket__header">
+                    <span className={`tier-badge tier-badge--${result.tier}`}>{result.tier}</span>
+                    <span>{result.completed ? 'Champion decided' : 'Playoff path'}</span>
+                  </header>
+                  {showReseedPreview ? (
+                    <div className="playoff-bracket__scroll">
+                      <PlayoffReseedPreview matches={tierMatches} />
+                    </div>
+                  ) : trees.length > 0 ? (
+                    <div className="playoff-bracket__scroll">
+                      <div className="playoff-tree" aria-label={`${result.tier} playoff bracket`}>
+                        {trees.map((tree) => <PlayoffTreeMatch key={tree.match.id} node={tree} />)}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="playoff-bracket__empty">
+                      {result.completed && result.winner ? (
+                        <>
+                          <strong>{result.winner}</strong>
+                          <span>Champion</span>
+                          {result.runnerUp && <small>Runner-up: {result.runnerUp}</small>}
+                        </>
+                      ) : (
+                        <span>Playoff match details are not available yet.</span>
+                      )}
+                    </div>
+                  )}
+                </section>
+              );
+            })}
           </div>
         </>
       )}
 
-      {(view === 'all' || view === 'schedule') && (() => {
+      {(view === 'schedule' ||
+        (view === 'all' && (tournament.series_stage !== 'playoffs' || allPlayoffSection === 'schedule'))) && (() => {
         const tierSortOrder: Record<string, number> = { pool: 1, platinum: 2, gold: 3, silver: 4, bronze: 5 };
         const sortedMatches = [...matches].sort((a, b) => {
           if (a.stage !== b.stage) return a.stage - b.stage;

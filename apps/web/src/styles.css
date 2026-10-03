@@ -593,6 +593,232 @@ button.button--danger:hover,
   background: rgba(239, 246, 255, 0.2);
 }
 
+.playoff-brackets {
+  display: grid;
+  gap: 14px;
+  margin: 14px 0 24px;
+}
+
+.playoff-bracket {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(23, 53, 44, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 253, 248, 0.82);
+  box-shadow: 0 4px 14px rgba(23, 53, 44, 0.06);
+}
+
+.playoff-bracket__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(23, 53, 44, 0.1);
+  color: #68766f;
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.playoff-bracket__scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  padding: 22px 26px;
+}
+
+.playoff-tree {
+  display: flex;
+  align-items: center;
+  gap: 44px;
+  width: max-content;
+  min-height: 150px;
+}
+
+.playoff-tree__node {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: max-content;
+}
+
+.playoff-tree__feeders {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 18px;
+  margin-right: 36px;
+  padding-right: 36px;
+}
+
+.playoff-tree__feeders.has-pair::before {
+  position: absolute;
+  top: 25%;
+  right: 0;
+  bottom: 25%;
+  border-right: 2px solid rgba(20, 108, 67, 0.35);
+  content: '';
+}
+
+.playoff-tree__feeders > .playoff-tree__node::after {
+  position: absolute;
+  top: 50%;
+  right: -36px;
+  width: 36px;
+  border-top: 2px solid rgba(20, 108, 67, 0.35);
+  content: '';
+}
+
+.playoff-tree__node.has-feeders > .playoff-tree-match::before {
+  position: absolute;
+  top: 50%;
+  left: -36px;
+  width: 36px;
+  border-top: 2px solid rgba(20, 108, 67, 0.35);
+  content: '';
+}
+
+.playoff-tree-match {
+  position: relative;
+  width: 220px;
+  padding: 12px 14px 10px;
+  border: 1px solid rgba(23, 53, 44, 0.14);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 3px 10px rgba(23, 53, 44, 0.08);
+}
+
+.playoff-tree-match.is-final {
+  border-color: rgba(20, 108, 67, 0.42);
+  box-shadow: 0 8px 20px rgba(20, 108, 67, 0.12);
+}
+
+.playoff-tree-match__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: #68766f;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.playoff-tree-match__status {
+  white-space: nowrap;
+}
+
+.playoff-tree-match__status.is-completed { color: #146c43; }
+.playoff-tree-match__status.is-live { color: #c0392b; }
+.playoff-tree-match__status.is-scheduled { color: #758078; }
+
+.playoff-tree-match__team {
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  padding: 5px 0;
+  border-top: 1px solid rgba(23, 53, 44, 0.08);
+  color: #44554d;
+  font-size: 0.88rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.playoff-tree-match__team.is-winner {
+  color: #146c43;
+  font-weight: 700;
+}
+
+.playoff-tree-match__score {
+  margin-top: 5px;
+  color: #17352c;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.playoff-reseed-preview {
+  display: grid;
+  grid-template-columns: 220px 220px 220px;
+  align-items: stretch;
+  gap: 48px;
+  width: max-content;
+  min-width: 100%;
+}
+
+.playoff-reseed-preview__round {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.playoff-reseed-preview__round:not(:last-child)::after {
+  position: absolute;
+  top: 54%;
+  right: -48px;
+  width: 48px;
+  border-top: 2px solid rgba(20, 108, 67, 0.35);
+  content: '';
+}
+
+.playoff-reseed-preview__round h4 {
+  margin: 0;
+  color: #17352c;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+}
+
+.playoff-reseed-preview__qualifiers,
+.playoff-reseed-preview__semifinals {
+  display: grid;
+  gap: 12px;
+}
+
+.playoff-reseed-preview__rule {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 11px 12px;
+  border-left: 3px solid #22a66b;
+  border-radius: 0 6px 6px 0;
+  background: rgba(46, 204, 113, 0.1);
+  color: #146c43;
+  font-size: 0.76rem;
+}
+
+.playoff-reseed-preview__rule span {
+  color: #68766f;
+  font-size: 0.7rem;
+}
+
+.playoff-reseed-preview__final {
+  display: flex;
+  flex: 1;
+  align-items: center;
+}
+
+.playoff-bracket__empty {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  min-height: 96px;
+  padding: 20px 24px;
+  color: #68766f;
+}
+
+.playoff-bracket__empty strong {
+  color: #146c43;
+  font-size: 1.05rem;
+}
+
+.playoff-bracket__empty small {
+  flex-basis: 100%;
+}
+
 .list {
   list-style: none;
   padding: 0;
