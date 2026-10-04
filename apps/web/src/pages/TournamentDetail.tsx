@@ -173,6 +173,16 @@ function PlayoffReseedPreview({ matches }: { matches: PlayoffMatch[] }) {
     feeders: [null, null],
   });
 
+  if (openingMatches.length === 2) {
+    const final = projectedMatch(-4, 3, 1, 'Final', 'Winner Semifinal 1', 'Winner Semifinal 2', true);
+    final.feeders = openingMatches.map((match) => ({ match, feeders: [null, null] }));
+    return (
+      <div className="playoff-tree" aria-label="Semifinals advancing to final">
+        <PlayoffTreeMatch node={final} />
+      </div>
+    );
+  }
+
   return (
     <div className="playoff-reseed-preview">
       <div className="playoff-reseed-preview__headings">
@@ -679,7 +689,9 @@ export function TournamentDetail() {
               const tierMatches = result.matches ?? [];
               const hasGeneratedStages = tierMatches.some((match) => match.stage >= 3);
               const hasFourOpeningMatches = tierMatches.filter((match) => match.stage === 2).length === 4;
+              const hasTwoSemifinals = tierMatches.filter((match) => match.stage === 2).length === 2;
               const showReseedPreview = tournament.series_stage === 'playoffs' && !hasGeneratedStages && hasFourOpeningMatches;
+              const showDirectFinalPreview = tournament.series_stage === 'playoffs' && !hasGeneratedStages && hasTwoSemifinals;
               const trees = buildPlayoffTrees(tierMatches);
 
               return (
@@ -688,7 +700,11 @@ export function TournamentDetail() {
                     <span className={`tier-badge tier-badge--${result.tier}`}>{result.tier}</span>
                     <span>{result.completed ? 'Champion decided' : 'Playoff path'}</span>
                   </header>
-                  {showReseedPreview ? (
+                  {showDirectFinalPreview ? (
+                    <div className="playoff-bracket__scroll">
+                      <PlayoffReseedPreview matches={tierMatches} />
+                    </div>
+                  ) : showReseedPreview ? (
                     <div className="playoff-bracket__scroll">
                       <PlayoffReseedPreview matches={tierMatches} />
                     </div>

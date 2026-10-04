@@ -970,10 +970,11 @@ export function AdminTournamentManage() {
               Number of teams per tier
               <input
                 type="number"
-                min={2}
-                max={50}
+                min={isSeriesPlayoffs ? 4 : 2}
+                max={isSeriesPlayoffs ? 8 : 50}
+                step={isSeriesPlayoffs ? 4 : 1}
                 value={teamsPerTier}
-                placeholder="All teams (or enter e.g. 6)"
+                placeholder={isSeriesPlayoffs ? '4 or 8 teams' : 'All teams (or enter e.g. 6)'}
                 onChange={(e) => {
                   const val = e.target.value === '' ? '' : Number(e.target.value);
                   setTeamsPerTier(val);
@@ -985,6 +986,11 @@ export function AdminTournamentManage() {
                 style={{ width: '100%' }}
               />
             </label>
+            {isSeriesPlayoffs && (
+              <small className="admin-help">
+                4 teams: seeds 1 vs 3 and 2 vs 4, then a final. 8 teams: four quarterfinals, reseeded semifinals, then a final.
+              </small>
+            )}
             <label>
               Round 2 Start Time
               <input
@@ -1048,7 +1054,7 @@ export function AdminTournamentManage() {
           <h2>Round 3 &amp; 4 — Playoff Knockout</h2>
           <p>
             {isSeriesPlayoffs
-              ? 'The four Round 2 winners in each tier advance to two Round 3 semifinals. Those semifinal winners meet in one Round 4 final.'
+              ? 'With 4 teams per tier, the Round 2 semifinals feed directly into a Round 3 final. With 8 teams, four Round 2 quarterfinal winners are reseeded into Round 3 semifinals, followed by a Round 4 final.'
               : 'Takes the top qualifying teams from each active tier\'s Round 2 standings into a knockout bracket. With four qualifiers, the semifinals are seed 1 vs 3 and seed 2 vs 4.'}
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1rem' }}>
@@ -1103,7 +1109,9 @@ export function AdminTournamentManage() {
                   }),
                 {
                   successMsg: isSeriesPlayoffs
-                    ? 'Round 3 semifinals and Round 4 finals generated for each tier.'
+                    ? teamsPerTier === 4
+                      ? 'Round 3 finals generated from the Round 2 semifinal winners.'
+                      : 'Round 3 semifinals and Round 4 finals generated for each tier.'
                     : `Playoff knockout bracket generated successfully for top ${topCount} qualifying teams per tier!`,
                   title: 'Generate Playoffs',
                 }
