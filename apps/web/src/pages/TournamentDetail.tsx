@@ -405,7 +405,8 @@ export function TournamentDetail() {
 
   useEffect(() => {
     const bracketIsVisible = view === 'bracket' || (view === 'all' && allPlayoffSection === 'bracket');
-    if (tournament?.series_stage !== 'playoffs' || !bracketIsVisible) return;
+    const hasKnockoutBracket = tournament?.series_stage === 'playoffs' || matches.some((match) => match.stage >= 3);
+    if (!hasKnockoutBracket || !bracketIsVisible) return;
 
     const refreshTierResults = () => {
       api
@@ -415,7 +416,7 @@ export function TournamentDetail() {
     };
     const intervalId = window.setInterval(refreshTierResults, 2500);
     return () => window.clearInterval(intervalId);
-  }, [id, tournament?.series_stage, view, allPlayoffSection]);
+  }, [id, tournament?.series_stage, view, allPlayoffSection, matches]);
 
   useEffect(() => {
     const standingsAreVisible = view === 'all' || view === 'standings';
@@ -455,6 +456,8 @@ export function TournamentDetail() {
   if (!tournament) return <p>Loading...</p>;
 
   const winners = getTournamentWinners(tournament, tierResults, matches, standings);
+  const hasKnockoutBracket = tournament.series_stage === 'playoffs' || matches.some((match) => match.stage >= 3);
+  const bracketOrder = tournament.series_stage === 'playoffs' ? TIER_ORDER : ['main'];
 
   return (
     <div className="card">
@@ -510,7 +513,7 @@ export function TournamentDetail() {
         >
           Standings
         </button>
-        {tournament.series_stage === 'playoffs' && (
+        {hasKnockoutBracket && (
           <button className={`tab-nav-link${view === 'bracket' ? ' active' : ''}`} onClick={() => setView('bracket')}>
             Bracket
           </button>
@@ -686,13 +689,13 @@ export function TournamentDetail() {
         </>
       )}
 
-      {view === 'all' && tournament.series_stage === 'playoffs' && (
+      {view === 'all' && hasKnockoutBracket && (
         <nav className="tab-nav playoff-content-tabs" aria-label="Playoff content">
           <button
             className={`tab-nav-link${allPlayoffSection === 'bracket' ? ' active' : ''}`}
             onClick={() => setAllPlayoffSection('bracket')}
           >
-            Round 3 &amp; 4 — Playoff Brackets
+            {tournament.series_stage === 'playoffs' ? 'Round 3 & 4 — Playoff Brackets' : 'Final Bracket'}
           </button>
           <button
             className={`tab-nav-link${allPlayoffSection === 'schedule' ? ' active' : ''}`}
@@ -704,12 +707,12 @@ export function TournamentDetail() {
       )}
 
       {(view === 'standings' || view === 'bracket' ||
-        (view === 'all' && (tournament.series_stage !== 'playoffs' || allPlayoffSection === 'bracket'))) &&
+        (view === 'all' && (!hasKnockoutBracket || allPlayoffSection === 'bracket'))) &&
         tierResults.length > 0 && (
         <>
-          <h2>Round 3 &amp; 4 — Playoff Brackets</h2>
+          <h2>{tournament.series_stage === 'playoffs' ? 'Round 3 & 4 — Playoff Brackets' : 'Final Bracket'}</h2>
           <div className="playoff-brackets">
-            {TIER_ORDER.filter((tier) => tierResults.some((result) => result.tier === tier)).map((tier) => {
+            {bracketOrder.filter((tier) => tierResults.some((result) => result.tier === tier)).map((tier) => {
               const result = tierResults.find((item) => item.tier === tier)!;
               const tierMatches = result.matches ?? [];
               const hasGeneratedStages = tierMatches.some((match) => match.stage >= 3);
@@ -722,7 +725,11 @@ export function TournamentDetail() {
               return (
                 <section className={`playoff-bracket playoff-bracket--${result.tier}`} key={result.tier}>
                   <header className="playoff-bracket__header">
-                    <span className={`tier-badge tier-badge--${result.tier}`}>{result.tier}</span>
+                    {result.tier === 'main' ? (
+                      <span className="tag tag--outline">Final</span>
+                    ) : (
+                      <span className={`tier-badge tier-badge--${result.tier}`}>{result.tier}</span>
+                    )}
                     <span>{result.completed ? 'Champion decided' : 'Playoff path'}</span>
                   </header>
                   {showDirectFinalPreview ? (
@@ -760,7 +767,7 @@ export function TournamentDetail() {
       )}
 
       {(view === 'schedule' ||
-        (view === 'all' && (tournament.series_stage !== 'playoffs' || allPlayoffSection === 'schedule'))) && (() => {
+        (view === 'all' && (!hasKnockoutBracket || allPlayoffSection === 'schedule'))) && (() => {
         const tierSortOrder: Record<string, number> = { pool: 1, platinum: 2, gold: 3, silver: 4, bronze: 5 };
         const sortedMatches = [...matches].sort((a, b) => {
           if (a.stage !== b.stage) return a.stage - b.stage;
