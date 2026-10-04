@@ -11,7 +11,7 @@ import {
   type MatchDraft,
   type LinkDraft,
 } from '../bracket';
-import { computeOverallRanking, computeTierStandings, assignTiers, tiersForCount, type Tier } from '../standings';
+import { computeOverallRanking, computeTierStandings, assignTiers, tiersForCount, type StandingRow, type Tier } from '../standings';
 
 export const matchRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -394,6 +394,225 @@ async function blockIfCompleted(db: Env['DB'], tournamentId: string | number, st
   return row !== null && row.count > 0;
 }
 
+interface SeriesPlayoffQualifierMatch {
+  id: number;
+  match_number: number;
+  team1_id: number | null;
+  team2_id: number | null;
+  winner_id: number | null;
+  score_json: string | null;
+}
+
+function calculateWinnerPointDifferential(match: SeriesPlayoffQualifierMatch): number {
+  if (!match.winner_id || !match.score_json) return 0;
+  try {
+    const games = JSON.parse(match.score_json);
+    if (!Array.isArray(games)) return 0;
+    const differential = games.reduce((total, game) =>
+      typeof game?.team1 === 'number' && typeof game?.team2 === 'number'
+        ? total + game.team1 - game.team2
+        : total, 0);
+    return match.winner_id === match.team1_id ? differential : -differential;
+  } catch {
+    return 0;
+  }
+}
+
+function rankSeriesPlayoffWinners(matches: SeriesPlayoffQualifierMatch[]) {
+  return matches
+    .filter((match) => match.winner_id !== null)
+    .map((match) => ({ match, pointDifferential: calculateWinnerPointDifferential(match) }))
+    .sort((a, b) => b.pointDifferential - a.pointDifferential || a.match.match_number - b.match.match_number);
+}
+
+async function refreshSeriesPlayoffAdvancement(db: Env['DB'], tournamentId: number, tier: string) {
+  const { results: qualifiers } = await db.prepare(
+    `SELECT id, match_number, team1_id, team2_id, winner_id, score_json
+     FROM matches
+     WHERE tournament_id = ? AND stage = 2 AND bracket_type = ? AND status = 'completed'
+     ORDER BY match_number`
+  )
+    .bind(tournamentId, tier)
+    .all<SeriesPlayoffQualifierMatch>();
+  const { results: stage3Matches } = await db.prepare(
+    `SELECT id, match_number FROM matches
+     WHERE tournament_id = ? AND stage = 3 AND bracket_type = ?
+     ORDER BY match_number`
+  )
+    .bind(tournamentId, tier)
+    .all<{ id: number; match_number: number }>();
+
+  if (stage3Matches.length === 1 && qualifiers.length === 2) {
+    const [semi1, semi2] = qualifiers;
+    await db.batch([
+      db.prepare('UPDATE matches SET team1_id = ?, team2_id = ? WHERE id = ?')
+        .bind(semi1.winner_id, semi2.winner_id, stage3Matches[0].id),
+      db.prepare('UPDATE matches SET next_match_id = NULL, next_match_slot = NULL WHERE tournament_id = ? AND stage = 2 AND bracket_type = ?')
+        .bind(tournamentId, tier),
+      db.prepare('UPDATE matches SET next_match_id = ?, next_match_slot = 1 WHERE id = ?')
+        .bind(stage3Matches[0].id, semi1.id),
+      db.prepare('UPDATE matches SET next_match_id = ?, next_match_slot = 2 WHERE id = ?')
+        .bind(stage3Matches[0].id, semi2.id),
+    ]);
+    return;
+  }
+
+  if (stage3Matches.length !== 2 || qualifiers.length !== 4) return;
+  const [seed1, seed2, seed3, seed4] = rankSeriesPlayoffWinners(qualifiers);
+  if (!seed1 || !seed2 || !seed3 || !seed4) return;
+  const semi1 = stage3Matches.find((match) => match.match_number === 1);
+  const semi2 = stage3Matches.find((match) => match.match_number === 2);
+  if (!semi1 || !semi2) return;
+
+  await db.batch([
+    db.prepare('UPDATE matches SET team1_id = ?, team2_id = ? WHERE id = ?')
+      .bind(seed1.match.winner_id, seed3.match.winner_id, semi1.id),
+    db.prepare('UPDATE matches SET team1_id = ?, team2_id = ? WHERE id = ?')
+      .bind(seed2.match.winner_id, seed4.match.winner_id, semi2.id),
+    db.prepare('UPDATE matches SET next_match_id = NULL, next_match_slot = NULL WHERE tournament_id = ? AND stage = 2 AND bracket_type = ?')
+      .bind(tournamentId, tier),
+    db.prepare('UPDATE matches SET next_match_id = ?, next_match_slot = 1 WHERE id = ?')
+      .bind(semi1.id, seed1.match.id),
+    db.prepare('UPDATE matches SET next_match_id = ?, next_match_slot = 2 WHERE id = ?')
+      .bind(semi1.id, seed3.match.id),
+    db.prepare('UPDATE matches SET next_match_id = ?, next_match_slot = 1 WHERE id = ?')
+      .bind(semi2.id, seed2.match.id),
+    db.prepare('UPDATE matches SET next_match_id = ?, next_match_slot = 2 WHERE id = ?')
+      .bind(semi2.id, seed4.match.id),
+  ]);
+}
+
+interface SeriesQualifierTeam extends StandingRow {
+  sourceTournamentId: number;
+  name: string;
+  player1_name: string;
+  player2_name: string | null;
+}
+
+interface PlayoffSnapshotTeam {
+  id: number;
+  name: string;
+  player1_name: string;
+  player2_name: string | null;
+  pool: string | null;
+  seed: number | null;
+  tier: Tier | null;
+}
+
+async function refreshGeneratedSeriesPlayoff(db: Env['DB'], seriesId: number) {
+  const playoff = await db.prepare(
+    "SELECT id FROM tournaments WHERE series_id = ? AND series_stage = 'playoffs'"
+  )
+    .bind(seriesId)
+    .first<{ id: number }>();
+  if (!playoff) return;
+
+  const { results: qualifierRows } = await db.prepare(
+    "SELECT id FROM tournaments WHERE series_id = ? AND series_stage LIKE 'qualifier_%' ORDER BY series_stage"
+  )
+    .bind(seriesId)
+    .all<{ id: number }>();
+  const rankedTeams: SeriesQualifierTeam[] = [];
+
+  for (const qualifier of qualifierRows) {
+    const ranking = await computeOverallRanking(db, qualifier.id);
+    const { results: sourceTeams } = await db.prepare(
+      'SELECT id, name, player1_name, player2_name FROM teams WHERE tournament_id = ?'
+    )
+      .bind(qualifier.id)
+      .all<{ id: number; name: string; player1_name: string; player2_name: string | null }>();
+    const sourceById = new Map(sourceTeams.map((team) => [team.id, team]));
+    for (const row of ranking) {
+      const source = sourceById.get(row.teamId);
+      if (source) rankedTeams.push({ ...row, sourceTournamentId: qualifier.id, ...source });
+    }
+  }
+
+  rankedTeams.sort(
+    (a, b) =>
+      b.wins - a.wins ||
+      b.pointDifferential - a.pointDifferential ||
+      a.teamName.localeCompare(b.teamName) ||
+      a.sourceTournamentId - b.sourceTournamentId
+  );
+
+  const { results: playoffTeams } = await db.prepare(
+    `SELECT id, name, player1_name, player2_name, pool, seed, tier
+     FROM teams WHERE tournament_id = ? ORDER BY seed`
+  )
+    .bind(playoff.id)
+    .all<PlayoffSnapshotTeam>();
+  const teamKey = (team: { name: string; player1_name: string; player2_name: string | null }) =>
+    [team.name, team.player1_name, team.player2_name ?? ''].map((value) => value.trim().toLowerCase()).join('|');
+  const playoffTeamsByKey = new Map<string, PlayoffSnapshotTeam[]>();
+  for (const team of playoffTeams) {
+    const key = teamKey(team);
+    const list = playoffTeamsByKey.get(key) ?? [];
+    list.push(team);
+    playoffTeamsByKey.set(key, list);
+  }
+
+  const snapshot = rankedTeams.map((ranked, index) => ({
+    ranked,
+    team: playoffTeamsByKey.get(teamKey(ranked))?.shift(),
+    seed: index + 1,
+  }));
+  if (snapshot.some((entry) => !entry.team)) return;
+
+  const tierOrder: Tier[] = ['platinum', 'gold', 'silver', 'bronze'];
+  const tierSizes = new Map(tierOrder.map((tier) => [tier, playoffTeams.filter((team) => team.tier === tier).length]));
+  const refreshed = snapshot.map((entry) => {
+    let tier: Tier | null = null;
+    let tierStart = 0;
+    for (const candidate of tierOrder) {
+      const tierEnd = tierStart + (tierSizes.get(candidate) ?? 0);
+      if (entry.seed - 1 >= tierStart && entry.seed - 1 < tierEnd) {
+        tier = candidate;
+        break;
+      }
+      tierStart = tierEnd;
+    }
+    return { ...entry, tier };
+  });
+
+  const { results: playoffMatches } = await db.prepare(
+    `SELECT id, stage, bracket_type, round, match_number, status
+     FROM matches WHERE tournament_id = ? AND stage IN (2, 3, 4)`
+  )
+    .bind(playoff.id)
+    .all<{ id: number; stage: number; bracket_type: string; round: number; match_number: number; status: string }>();
+  if (playoffMatches.some((match) => match.status !== 'scheduled')) return;
+
+  const statements = refreshed.map(({ ranked, team, seed, tier }) => db.prepare(
+    `UPDATE teams SET seed = ?, pool = ?, qualifier_wins = ?, qualifier_point_differential = ?, tier = ?
+     WHERE id = ?`
+  ).bind(seed, ranked.pool, ranked.wins, ranked.pointDifferential, tier, team!.id));
+
+  for (const tier of tierOrder) {
+    const tierTeams = refreshed.filter((entry) => entry.tier === tier).sort((a, b) => a.seed - b.seed);
+    const tierMatches = playoffMatches
+      .filter((match) => match.stage === 2 && match.bracket_type === tier)
+      .sort((a, b) => a.match_number - b.match_number);
+    if (tierTeams.length === 4 && tierMatches.length === 2) {
+      statements.push(
+        db.prepare('UPDATE matches SET team1_id = ?, team2_id = ? WHERE id = ?')
+          .bind(tierTeams[0].team!.id, tierTeams[2].team!.id, tierMatches[0].id),
+        db.prepare('UPDATE matches SET team1_id = ?, team2_id = ? WHERE id = ?')
+          .bind(tierTeams[1].team!.id, tierTeams[3].team!.id, tierMatches[1].id)
+      );
+    } else if (tierTeams.length === 8 && tierMatches.length === 4) {
+      for (let index = 0; index < 4; index++) {
+        statements.push(
+          db.prepare('UPDATE matches SET team1_id = ?, team2_id = ? WHERE id = ?')
+            .bind(tierTeams[index].team!.id, tierTeams[index + 4].team!.id, tierMatches[index].id)
+        );
+      }
+    }
+  }
+
+  if (statements.length > 0) await db.batch(statements);
+}
+
 // Round 1: randomly splits all registered teams into `groupCount` even groups and
 // generates a round-robin pool-play schedule within each group.
 matchRoutes.post('/tournaments/:tournamentId/round1/generate-groups', requireAdmin, requireTournamentManager(async (c) => c.req.param('tournamentId')), async (c) => {
@@ -662,26 +881,7 @@ matchRoutes.post('/tournaments/:tournamentId/round3/generate-knockout', requireA
         .all<{ id: number; round: number; match_number: number }>();
       const semi1Id = playoffMatches.find((match) => match.round === 1 && match.match_number === 1)?.id;
       const semi2Id = playoffMatches.find((match) => match.round === 1 && match.match_number === 2)?.id;
-      const rankedWinners = tierMatches
-        .map((match) => {
-          let pointDifferential = 0;
-          if (match.score_json) {
-            try {
-              const games = JSON.parse(match.score_json);
-              if (Array.isArray(games)) {
-                for (const game of games) {
-                  if (typeof game?.team1 !== 'number' || typeof game?.team2 !== 'number') continue;
-                  const team1Differential = game.team1 - game.team2;
-                  pointDifferential += match.winner_id === match.team1_id ? team1Differential : -team1Differential;
-                }
-              }
-            } catch {
-              pointDifferential = 0;
-            }
-          }
-          return { match, pointDifferential };
-        })
-        .sort((a, b) => b.pointDifferential - a.pointDifferential || a.match.match_number - b.match.match_number);
+      const rankedWinners = rankSeriesPlayoffWinners(tierMatches);
       const [seed1, seed2, seed3, seed4] = rankedWinners;
       if (!semi1Id || !semi2Id || !finalMatch || !seed1 || !seed2 || !seed3 || !seed4) {
         return c.json({ error: `Could not wire ${tier} semifinal advancement` }, 500);
@@ -993,6 +1193,9 @@ matchRoutes.patch('/matches/:id/score', requireAdmin, requireTournamentManager((
 
   const match = await c.env.DB.prepare('SELECT * FROM matches WHERE id = ?').bind(id).first<{
     id: number;
+    tournament_id: number;
+    stage: number;
+    bracket_type: string;
     scheduled_time: string | null;
     team1_id: number | null;
     team2_id: number | null;
@@ -1000,6 +1203,45 @@ matchRoutes.patch('/matches/:id/score', requireAdmin, requireTournamentManager((
     next_match_slot: number | null;
   }>();
   if (!match) return c.json({ error: 'Match not found' }, 404);
+
+  let isSeriesPlayoffQualifier = false;
+  let qualifierSeriesId: number | null = null;
+  if (match.stage === 1 || match.stage === 2) {
+    const tournament = await c.env.DB.prepare('SELECT series_id, series_stage FROM tournaments WHERE id = ?')
+      .bind(match.tournament_id)
+      .first<{ series_id: number | null; series_stage: string | null }>();
+    isSeriesPlayoffQualifier = tournament?.series_stage === 'playoffs';
+    if (isSeriesPlayoffQualifier) {
+      const downstreamStarted = await c.env.DB.prepare(
+        `SELECT COUNT(*) AS count FROM matches
+         WHERE tournament_id = ? AND bracket_type = ? AND stage IN (3, 4) AND status != 'scheduled'`
+      )
+        .bind(match.tournament_id, match.bracket_type)
+        .first<{ count: number }>();
+      if ((downstreamStarted?.count ?? 0) > 0) {
+        return c.json({ error: 'Cannot change a qualifier result after its semifinals or final have started' }, 409);
+      }
+    }
+    if (tournament?.series_id && tournament.series_stage?.startsWith('qualifier_')) {
+      const playoff = await c.env.DB.prepare(
+        "SELECT id FROM tournaments WHERE series_id = ? AND series_stage = 'playoffs'"
+      )
+        .bind(tournament.series_id)
+        .first<{ id: number }>();
+      if (playoff) {
+        const playoffMatchesStarted = await c.env.DB.prepare(
+          `SELECT COUNT(*) AS count FROM matches
+           WHERE tournament_id = ? AND stage >= 2 AND status != 'scheduled'`
+        )
+          .bind(playoff.id)
+          .first<{ count: number }>();
+        if ((playoffMatchesStarted?.count ?? 0) > 0) {
+          return c.json({ error: 'Cannot change qualifier results after playoff matches have started' }, 409);
+        }
+        qualifierSeriesId = tournament.series_id;
+      }
+    }
+  }
 
   const scheduledTime = body.scheduled_time ?? match.scheduled_time;
   if (!scheduledTime || !scheduledTime.trim()) {
@@ -1039,6 +1281,13 @@ matchRoutes.patch('/matches/:id/score', requireAdmin, requireTournamentManager((
     await c.env.DB.prepare(`UPDATE matches SET ${column} = ? WHERE id = ?`)
       .bind(body.winner_id, match.next_match_id)
       .run();
+  }
+
+  if (isSeriesPlayoffQualifier) {
+    await refreshSeriesPlayoffAdvancement(c.env.DB, match.tournament_id, match.bracket_type);
+  }
+  if (qualifierSeriesId !== null) {
+    await refreshGeneratedSeriesPlayoff(c.env.DB, qualifierSeriesId);
   }
 
   const updated = await c.env.DB.prepare('SELECT * FROM matches WHERE id = ?').bind(id).first();

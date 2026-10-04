@@ -102,6 +102,60 @@ async function computeTeamStats(db: Env['DB'], tournamentId: string | number, st
   }));
 }
 
+async function includeAdditionalPoolRoundStats(
+  db: Env['DB'],
+  tournamentId: string | number,
+  rows: StandingRow[]
+): Promise<StandingRow[]> {
+  const stats = new Map(rows.map((row) => [row.teamId, { ...row }]));
+  const { results: matches } = await db.prepare(
+    `SELECT m.team1_id, m.team2_id, m.winner_id, m.score_json,
+            t1.pool AS team1_pool, t2.pool AS team2_pool
+     FROM matches m
+     JOIN teams t1 ON t1.id = m.team1_id
+     JOIN teams t2 ON t2.id = m.team2_id
+     WHERE m.tournament_id = ? AND m.stage = 2 AND m.status = 'completed'
+       AND m.bracket_type IN ('main', 'pool')`
+  )
+    .bind(tournamentId)
+    .all<{
+      team1_id: number;
+      team2_id: number;
+      winner_id: number | null;
+      score_json: string | null;
+      team1_pool: string | null;
+      team2_pool: string | null;
+    }>();
+
+  for (const match of matches) {
+    if (!match.team1_pool || match.team1_pool !== match.team2_pool) continue;
+    const team1 = stats.get(match.team1_id);
+    const team2 = stats.get(match.team2_id);
+    if (!team1 || !team2) continue;
+    if (match.winner_id === match.team1_id) {
+      team1.wins++;
+      team2.losses++;
+    } else if (match.winner_id === match.team2_id) {
+      team2.wins++;
+      team1.losses++;
+    }
+    if (!match.score_json) continue;
+    try {
+      const games = JSON.parse(match.score_json);
+      if (!Array.isArray(games)) continue;
+      for (const game of games) {
+        if (typeof game?.team1 !== 'number' || typeof game?.team2 !== 'number') continue;
+        team1.pointDifferential += game.team1 - game.team2;
+        team2.pointDifferential += game.team2 - game.team1;
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return [...stats.values()];
+}
+
 // Round 1 standings: grouped and sorted by pool, from the random-group pool-play matches.
 // Only includes teams that have actually been assigned to a pool.
 export async function computePoolStandings(db: Env['DB'], tournamentId: string | number): Promise<StandingRow[]> {
@@ -111,7 +165,8 @@ export async function computePoolStandings(db: Env['DB'], tournamentId: string |
     .first<{ series_stage: string | null }>();
   if (tournament?.series_stage === 'playoffs') return [];
 
-  const rows = await computeTeamStats(db, tournamentId, 1);
+  const stageOneRows = await computeTeamStats(db, tournamentId, 1);
+  const rows = await includeAdditionalPoolRoundStats(db, tournamentId, stageOneRows);
   return rows
     .filter((r) => r.pool !== null)
     .sort(
@@ -125,7 +180,8 @@ export async function computePoolStandings(db: Env['DB'], tournamentId: string |
 
 // Overall Round 1 ranking across all pools combined, used to assign Round 2 tiers.
 export async function computeOverallRanking(db: Env['DB'], tournamentId: string | number): Promise<StandingRow[]> {
-  const rows = await computeTeamStats(db, tournamentId, 1);
+  const stageOneRows = await computeTeamStats(db, tournamentId, 1);
+  const rows = await includeAdditionalPoolRoundStats(db, tournamentId, stageOneRows);
   return rows
     .filter((r) => r.pool !== null)
     .sort(
