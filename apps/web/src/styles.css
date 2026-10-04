@@ -739,42 +739,109 @@ button.button--danger:hover,
 }
 
 .playoff-reseed-preview {
-  display: grid;
-  grid-template-columns: 220px 220px 220px;
-  align-items: stretch;
-  gap: 48px;
   width: max-content;
   min-width: 100%;
 }
 
-.playoff-reseed-preview__round {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  min-width: 0;
+.playoff-reseed-preview__headings,
+.playoff-reseed-preview__grid {
+  display: grid;
+  grid-template-columns: 220px 220px 220px;
+  column-gap: 48px;
 }
 
-.playoff-reseed-preview__round:not(:last-child)::after {
-  position: absolute;
-  top: 54%;
-  right: -48px;
-  width: 48px;
-  border-top: 2px solid rgba(20, 108, 67, 0.35);
-  content: '';
+.playoff-reseed-preview__headings {
+  align-items: start;
+  margin-bottom: 14px;
 }
 
-.playoff-reseed-preview__round h4 {
+.playoff-reseed-preview__headings h4 {
   margin: 0;
   color: #17352c;
   font-size: 0.9rem;
   text-transform: uppercase;
 }
 
-.playoff-reseed-preview__qualifiers,
-.playoff-reseed-preview__semifinals {
-  display: grid;
-  gap: 12px;
+.playoff-reseed-preview__grid {
+  position: relative;
+  grid-template-areas:
+    'qualifier-1 . .'
+    'qualifier-2 semi-1 final'
+    'qualifier-3 semi-2 final'
+    'qualifier-4 . .';
+  grid-template-rows: repeat(4, auto);
+  row-gap: 12px;
+  align-items: center;
+}
+
+.playoff-reseed-preview__grid::before,
+.playoff-reseed-preview__grid::after {
+  position: absolute;
+  border-left: 2px solid rgba(20, 108, 67, 0.35);
+  content: '';
+  pointer-events: none;
+}
+
+.playoff-reseed-preview__grid::before {
+  top: 12%;
+  bottom: 12%;
+  left: 244px;
+}
+
+.playoff-reseed-preview__grid::after {
+  top: 37.5%;
+  bottom: 37.5%;
+  left: 512px;
+}
+
+.playoff-reseed-preview__match {
+  position: relative;
+  min-width: 0;
+}
+
+.playoff-reseed-preview__connector {
+  position: absolute;
+  top: 50%;
+  height: 0;
+  border-top: 2px solid rgba(20, 108, 67, 0.55);
+  pointer-events: none;
+}
+
+.playoff-reseed-preview__connector--to-reseed,
+.playoff-reseed-preview__connector--to-final {
+  right: -24px;
+  width: 24px;
+}
+
+.playoff-reseed-preview__connector--from-reseed,
+.playoff-reseed-preview__connector--from-semis {
+  left: -24px;
+  width: 24px;
+}
+
+.playoff-reseed-preview__connector--from-reseed::after,
+.playoff-reseed-preview__connector--from-semis::after {
+  position: absolute;
+  top: -5px;
+  right: -1px;
+  width: 8px;
+  height: 8px;
+  transform: rotate(45deg);
+  border-top: 2px solid #146c43;
+  border-right: 2px solid #146c43;
+  content: '';
+}
+
+.playoff-reseed-preview__match--qualifier-1 { grid-area: qualifier-1; }
+.playoff-reseed-preview__match--qualifier-2 { grid-area: qualifier-2; }
+.playoff-reseed-preview__match--qualifier-3 { grid-area: qualifier-3; }
+.playoff-reseed-preview__match--qualifier-4 { grid-area: qualifier-4; }
+.playoff-reseed-preview__match--semi-1 { grid-area: semi-1; }
+.playoff-reseed-preview__match--semi-2 { grid-area: semi-2; }
+
+.playoff-reseed-preview__match--final {
+  grid-area: final;
+  align-self: center;
 }
 
 .playoff-reseed-preview__rule {
@@ -792,12 +859,6 @@ button.button--danger:hover,
 .playoff-reseed-preview__rule span {
   color: #68766f;
   font-size: 0.7rem;
-}
-
-.playoff-reseed-preview__final {
-  display: flex;
-  flex: 1;
-  align-items: center;
 }
 
 .playoff-bracket__empty {
