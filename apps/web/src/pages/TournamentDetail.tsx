@@ -382,6 +382,11 @@ export function TournamentDetail() {
   const [filterTeam, setFilterTeam] = useState<string>('all');
   const [collapsedDates, setCollapsedDates] = useState<Set<string>>(new Set());
   const [collapsedTeamGroups, setCollapsedTeamGroups] = useState<Set<string>>(new Set());
+  const teamGroupKeySignature = [...new Set(
+    teams.map((team) =>
+      tournament?.series_stage === 'playoffs' ? team.tier ?? 'Unassigned' : team.pool ?? 'Ungrouped'
+    )
+  )].sort().join('|');
 
   const load = () => {
     api.get<{ tournament: Tournament }>(`/api/tournaments/${id}`).then((r) => setTournament(r.tournament));
@@ -431,13 +436,8 @@ export function TournamentDetail() {
   }, [id, tournament?.series_stage, view]);
 
   useEffect(() => {
-    const groupKeys = new Set(
-      teams.map((team) =>
-        tournament?.series_stage === 'playoffs' ? team.tier ?? 'Unassigned' : team.pool ?? 'Ungrouped'
-      )
-    );
-    setCollapsedTeamGroups(groupKeys);
-  }, [teams, tournament?.series_stage]);
+    setCollapsedTeamGroups(new Set(teamGroupKeySignature ? teamGroupKeySignature.split('|') : []));
+  }, [id, tournament?.series_stage, teamGroupKeySignature]);
 
   const registerTeam = async (e: React.FormEvent) => {
     e.preventDefault();
