@@ -330,6 +330,19 @@ function getTournamentWinners(
     }
   }
 
+  if (tournament.format === 'pool_play' || tournament.format === 'round_robin') {
+    const directFinal = matches.find(
+      (match) => match.stage === 3 && match.bracket_type === 'main' && match.status === 'completed' && match.winner_id
+    );
+    if (directFinal) {
+      const winnerName = directFinal.winner_id === directFinal.team1_id ? directFinal.team1_name : directFinal.team2_name;
+      const runnerUpName = directFinal.winner_id === directFinal.team1_id ? directFinal.team2_name : directFinal.team1_name;
+      if (winnerName) {
+        return [{ label: 'Tournament Champion', winner: winnerName, runnerUp: runnerUpName, tier: 'main' }];
+      }
+    }
+  }
+
   // 3. Pure Round Robin
   if (tournament.format === 'round_robin' && standings.length > 0) {
     const allMatchesCompleted =
@@ -403,6 +416,18 @@ export function TournamentDetail() {
     const intervalId = window.setInterval(refreshTierResults, 2500);
     return () => window.clearInterval(intervalId);
   }, [id, tournament?.series_stage, view, allPlayoffSection]);
+
+  useEffect(() => {
+    const standingsAreVisible = view === 'all' || view === 'standings';
+    if (tournament?.series_stage !== 'playoffs' || !standingsAreVisible) return;
+
+    const refreshPlayoffStandings = () => {
+      api.get<{ teams: Team[] }>(`/api/tournaments/${id}/teams`).then((result) => setTeams(result.teams)).catch(() => undefined);
+      api.get<{ standings: Standing[] }>(`/api/tournaments/${id}/tier-standings`).then((result) => setTierStandings(result.standings)).catch(() => undefined);
+    };
+    const intervalId = window.setInterval(refreshPlayoffStandings, 2500);
+    return () => window.clearInterval(intervalId);
+  }, [id, tournament?.series_stage, view]);
 
   useEffect(() => {
     const groupKeys = new Set(
@@ -797,7 +822,11 @@ export function TournamentDetail() {
                   <option value="all">All Rounds</option>
                   <option value="1">Round 1 (Groups)</option>
                   <option value="2">Round 2 (Tiers)</option>
-                  <option value="3">Round 3 (Semifinals)</option>
+                  <option value="3">
+                    {matches.some((match) => match.stage === 3 && match.bracket_type === 'main')
+                      ? 'Round 3 (Final)'
+                      : 'Round 3 (Semifinals)'}
+                  </option>
                   {tournament.series_stage === 'playoffs' && <option value="4">Round 4 (Final)</option>}
                 </select>
               </div>

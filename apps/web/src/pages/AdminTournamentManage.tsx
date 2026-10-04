@@ -1601,7 +1601,7 @@ function MatchRow({ match, courts, onChange }: { match: Match; courts: Court[]; 
   let stageLabel = `Round ${match.stage}`;
   if (match.stage === 1) stageLabel = 'Round 1';
   else if (match.stage === 2) stageLabel = 'Round 2';
-  else if (match.stage === 3) stageLabel = 'Round 3 — Semifinal';
+  else if (match.stage === 3) stageLabel = match.bracket_type === 'main' ? 'Round 3 — Final' : 'Round 3 — Semifinal';
   else if (match.stage === 4) stageLabel = 'Round 4 — Final';
 
   return (

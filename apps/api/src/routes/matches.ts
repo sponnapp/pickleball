@@ -696,9 +696,9 @@ matchRoutes.post('/tournaments/:tournamentId/round2/generate-tiers', requireAdmi
   const tournamentId = c.req.param('tournamentId')!;
   const body = await c.req.json<{ tierCount?: number; teamsPerTier?: number; startTime?: string; endTime?: string }>().catch(() => ({}) as { tierCount?: number; teamsPerTier?: number; startTime?: string; endTime?: string });
   const tierCount = Math.max(1, Math.min(4, body.tierCount ?? 4));
-  const playoff = await c.env.DB.prepare('SELECT series_stage FROM tournaments WHERE id = ?')
+  const playoff = await c.env.DB.prepare('SELECT series_stage, format FROM tournaments WHERE id = ?')
     .bind(tournamentId)
-    .first<{ series_stage: string | null }>();
+    .first<{ series_stage: string | null; format: string }>();
   const isSeriesPlayoffs = playoff?.series_stage === 'playoffs';
   const teamsPerTier = body.teamsPerTier && body.teamsPerTier > 0
     ? Number(body.teamsPerTier)
@@ -800,9 +800,9 @@ matchRoutes.post('/tournaments/:tournamentId/round3/generate-knockout', requireA
     return c.json({ error: 'Complete all Round 2 matches before generating Round 3/4' }, 409);
   }
 
-  const playoff = await c.env.DB.prepare('SELECT series_stage FROM tournaments WHERE id = ?')
+  const playoff = await c.env.DB.prepare('SELECT series_stage, format FROM tournaments WHERE id = ?')
     .bind(tournamentId)
-    .first<{ series_stage: string | null }>();
+    .first<{ series_stage: string | null; format: string }>();
   if (playoff?.series_stage === 'playoffs') {
     if (await blockIfCompleted(c.env.DB, tournamentId, 4)) {
       return c.json({ error: 'Cannot regenerate Round 3/4: the final already has a result' }, 409);
@@ -927,6 +927,37 @@ matchRoutes.post('/tournaments/:tournamentId/round3/generate-knockout', requireA
   }
 
   const standings = await computeTierStandings(c.env.DB, tournamentId);
+  if (
+    standings.length === 0 &&
+    topCount === 2 &&
+    (playoff?.format === 'pool_play' || playoff?.format === 'round_robin')
+  ) {
+    const ranking = (await computeOverallRanking(c.env.DB, tournamentId)).slice(0, 2);
+    if (ranking.length < 2) return c.json({ error: 'At least 2 ranked teams are required to generate a final' }, 400);
+
+    await c.env.DB.prepare('DELETE FROM matches WHERE tournament_id = ? AND stage = 3').bind(tournamentId).run();
+    await c.env.DB.prepare(
+      `INSERT INTO matches (tournament_id, stage, bracket_type, round, match_number, team1_id, team2_id)
+       VALUES (?, 3, 'main', 1, 1, ?, ?)`
+    )
+      .bind(tournamentId, ranking[0].teamId, ranking[1].teamId)
+      .run();
+    await autoScheduleMatches(c.env.DB, tournamentId, body.startTime, body.endTime, 3);
+
+    const { results } = await c.env.DB.prepare(
+      `SELECT m.*, t1.name AS team1_name, t2.name AS team2_name, co.name AS court_name
+       FROM matches m
+       LEFT JOIN teams t1 ON t1.id = m.team1_id
+       LEFT JOIN teams t2 ON t2.id = m.team2_id
+       LEFT JOIN courts co ON co.id = m.court_id
+       WHERE m.tournament_id = ? AND m.stage = 3
+       ORDER BY m.match_number`
+    )
+      .bind(tournamentId)
+      .all();
+    return c.json({ tiers: { main: 2 }, matches: results }, 201);
+  }
+
   await c.env.DB.prepare('DELETE FROM matches WHERE tournament_id = ? AND stage = 3').bind(tournamentId).run();
 
   const tierTypes: Tier[] = tiersForCount(4);
