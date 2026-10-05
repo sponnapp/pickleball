@@ -426,6 +426,10 @@ function rankSeriesPlayoffWinners(matches: SeriesPlayoffQualifierMatch[]) {
 }
 
 async function refreshSeriesPlayoffAdvancement(db: Env['DB'], tournamentId: number, tier: string) {
+  const tournament = await db.prepare('SELECT playoff_seeding FROM tournaments WHERE id = ?')
+    .bind(tournamentId)
+    .first<{ playoff_seeding: string }>();
+  const useFixedBracket = tournament?.playoff_seeding === 'fixed_bracket';
   const { results: qualifiers } = await db.prepare(
     `SELECT id, match_number, team1_id, team2_id, winner_id, score_json
      FROM matches
@@ -458,27 +462,36 @@ async function refreshSeriesPlayoffAdvancement(db: Env['DB'], tournamentId: numb
   }
 
   if (stage3Matches.length !== 2 || qualifiers.length !== 4) return;
+  const qf1 = qualifiers.find((match) => match.match_number === 1);
+  const qf2 = qualifiers.find((match) => match.match_number === 2);
+  const qf3 = qualifiers.find((match) => match.match_number === 3);
+  const qf4 = qualifiers.find((match) => match.match_number === 4);
+  if (!qf1 || !qf2 || !qf3 || !qf4) return;
   const [seed1, seed2, seed3, seed4] = rankSeriesPlayoffWinners(qualifiers);
-  if (!seed1 || !seed2 || !seed3 || !seed4) return;
+  if (!useFixedBracket && (!seed1 || !seed2 || !seed3 || !seed4)) return;
   const semi1 = stage3Matches.find((match) => match.match_number === 1);
   const semi2 = stage3Matches.find((match) => match.match_number === 2);
   if (!semi1 || !semi2) return;
+  const semi1First = useFixedBracket ? qf1 : seed1!.match;
+  const semi1Second = useFixedBracket ? qf3 : seed3!.match;
+  const semi2First = useFixedBracket ? qf2 : seed2!.match;
+  const semi2Second = useFixedBracket ? qf4 : seed4!.match;
 
   await db.batch([
     db.prepare('UPDATE matches SET team1_id = ?, team2_id = ? WHERE id = ?')
-      .bind(seed1.match.winner_id, seed3.match.winner_id, semi1.id),
+      .bind(semi1First.winner_id, semi1Second.winner_id, semi1.id),
     db.prepare('UPDATE matches SET team1_id = ?, team2_id = ? WHERE id = ?')
-      .bind(seed2.match.winner_id, seed4.match.winner_id, semi2.id),
+      .bind(semi2First.winner_id, semi2Second.winner_id, semi2.id),
     db.prepare('UPDATE matches SET next_match_id = NULL, next_match_slot = NULL WHERE tournament_id = ? AND stage = 2 AND bracket_type = ?')
       .bind(tournamentId, tier),
     db.prepare('UPDATE matches SET next_match_id = ?, next_match_slot = 1 WHERE id = ?')
-      .bind(semi1.id, seed1.match.id),
+      .bind(semi1.id, semi1First.id),
     db.prepare('UPDATE matches SET next_match_id = ?, next_match_slot = 2 WHERE id = ?')
-      .bind(semi1.id, seed3.match.id),
+      .bind(semi1.id, semi1Second.id),
     db.prepare('UPDATE matches SET next_match_id = ?, next_match_slot = 1 WHERE id = ?')
-      .bind(semi2.id, seed2.match.id),
+      .bind(semi2.id, semi2First.id),
     db.prepare('UPDATE matches SET next_match_id = ?, next_match_slot = 2 WHERE id = ?')
-      .bind(semi2.id, seed4.match.id),
+      .bind(semi2.id, semi2Second.id),
   ]);
 }
 
@@ -694,12 +707,21 @@ matchRoutes.post('/tournaments/:tournamentId/round1/generate-groups', requireAdm
 // a tier round-robin schedule.
 matchRoutes.post('/tournaments/:tournamentId/round2/generate-tiers', requireAdmin, requireTournamentManager(async (c) => c.req.param('tournamentId')), async (c) => {
   const tournamentId = c.req.param('tournamentId')!;
-  const body = await c.req.json<{ tierCount?: number; teamsPerTier?: number; startTime?: string; endTime?: string }>().catch(() => ({}) as { tierCount?: number; teamsPerTier?: number; startTime?: string; endTime?: string });
+  const body = await c.req.json<{
+    tierCount?: number;
+    teamsPerTier?: number;
+    startTime?: string;
+    endTime?: string;
+    semifinalMode?: 'score_reseed' | 'fixed_bracket';
+  }>().catch(() => ({}) as { tierCount?: number; teamsPerTier?: number; startTime?: string; endTime?: string; semifinalMode?: 'score_reseed' | 'fixed_bracket' });
   const tierCount = Math.max(1, Math.min(4, body.tierCount ?? 4));
-  const playoff = await c.env.DB.prepare('SELECT series_stage, format FROM tournaments WHERE id = ?')
+  const playoff = await c.env.DB.prepare('SELECT series_stage, format, playoff_seeding FROM tournaments WHERE id = ?')
     .bind(tournamentId)
-    .first<{ series_stage: string | null; format: string }>();
+    .first<{ series_stage: string | null; format: string; playoff_seeding: 'score_reseed' | 'fixed_bracket' }>();
   const isSeriesPlayoffs = playoff?.series_stage === 'playoffs';
+  const semifinalMode = body.semifinalMode === 'fixed_bracket' || body.semifinalMode === 'score_reseed'
+    ? body.semifinalMode
+    : playoff?.playoff_seeding ?? 'score_reseed';
   const teamsPerTier = body.teamsPerTier && body.teamsPerTier > 0
     ? Number(body.teamsPerTier)
     : isSeriesPlayoffs
@@ -724,6 +746,9 @@ matchRoutes.post('/tournaments/:tournamentId/round2/generate-tiers', requireAdmi
         return c.json({ error: `Series playoffs require 4 or 8 teams in each active tier; ${tier} has ${tierSize}` }, 400);
       }
     }
+    await c.env.DB.prepare('UPDATE tournaments SET playoff_seeding = ? WHERE id = ?')
+      .bind(semifinalMode, tournamentId)
+      .run();
   }
 
   for (const [teamId, tier] of Object.entries(tierByTeam)) {
@@ -782,7 +807,12 @@ matchRoutes.post('/tournaments/:tournamentId/round2/generate-tiers', requireAdmi
 // top 4 for semifinal + final) from Round 2 tier standings into a knockout bracket.
 matchRoutes.post('/tournaments/:tournamentId/round3/generate-knockout', requireAdmin, requireTournamentManager(async (c) => c.req.param('tournamentId')), async (c) => {
   const tournamentId = c.req.param('tournamentId')!;
-  const body = await c.req.json<{ topCount?: number; startTime?: string; endTime?: string }>().catch(() => ({}) as { topCount?: number; startTime?: string; endTime?: string });
+  const body = await c.req.json<{
+    topCount?: number;
+    startTime?: string;
+    endTime?: string;
+    semifinalMode?: 'score_reseed' | 'fixed_bracket';
+  }>().catch(() => ({}) as { topCount?: number; startTime?: string; endTime?: string; semifinalMode?: 'score_reseed' | 'fixed_bracket' });
   const topCount = Math.max(2, Math.min(16, body.topCount ?? 4));
 
   if (await blockIfCompleted(c.env.DB, tournamentId, 3)) {
@@ -800,9 +830,12 @@ matchRoutes.post('/tournaments/:tournamentId/round3/generate-knockout', requireA
     return c.json({ error: 'Complete all Round 2 matches before generating Round 3/4' }, 409);
   }
 
-  const playoff = await c.env.DB.prepare('SELECT series_stage, format FROM tournaments WHERE id = ?')
+  const playoff = await c.env.DB.prepare('SELECT series_stage, format, playoff_seeding FROM tournaments WHERE id = ?')
     .bind(tournamentId)
-    .first<{ series_stage: string | null; format: string }>();
+    .first<{ series_stage: string | null; format: string; playoff_seeding: 'score_reseed' | 'fixed_bracket' }>();
+  const semifinalMode = body.semifinalMode === 'fixed_bracket' || body.semifinalMode === 'score_reseed'
+    ? body.semifinalMode
+    : playoff?.playoff_seeding ?? 'score_reseed';
   if (playoff?.series_stage === 'playoffs') {
     if (await blockIfCompleted(c.env.DB, tournamentId, 4)) {
       return c.json({ error: 'Cannot regenerate Round 3/4: the final already has a result' }, 409);
@@ -831,6 +864,10 @@ matchRoutes.post('/tournaments/:tournamentId/round3/generate-knockout', requireA
         return c.json({ error: `Complete all two or four Round 2 matches in ${tier} before generating its playoffs` }, 409);
       }
     }
+
+    await c.env.DB.prepare('UPDATE tournaments SET playoff_seeding = ? WHERE id = ?')
+      .bind(semifinalMode, tournamentId)
+      .run();
 
     await c.env.DB.prepare('DELETE FROM matches WHERE tournament_id = ? AND stage IN (3, 4)').bind(tournamentId).run();
 
@@ -883,15 +920,24 @@ matchRoutes.post('/tournaments/:tournamentId/round3/generate-knockout', requireA
       const semi2Id = playoffMatches.find((match) => match.round === 1 && match.match_number === 2)?.id;
       const rankedWinners = rankSeriesPlayoffWinners(tierMatches);
       const [seed1, seed2, seed3, seed4] = rankedWinners;
-      if (!semi1Id || !semi2Id || !finalMatch || !seed1 || !seed2 || !seed3 || !seed4) {
+      const qf1 = tierMatches.find((match) => match.match_number === 1);
+      const qf2 = tierMatches.find((match) => match.match_number === 2);
+      const qf3 = tierMatches.find((match) => match.match_number === 3);
+      const qf4 = tierMatches.find((match) => match.match_number === 4);
+      if (!semi1Id || !semi2Id || !finalMatch || !qf1 || !qf2 || !qf3 || !qf4 ||
+          (semifinalMode === 'score_reseed' && (!seed1 || !seed2 || !seed3 || !seed4))) {
         return c.json({ error: `Could not wire ${tier} semifinal advancement` }, 500);
       }
+      const semi1First = semifinalMode === 'fixed_bracket' ? qf1 : seed1!.match;
+      const semi1Second = semifinalMode === 'fixed_bracket' ? qf3 : seed3!.match;
+      const semi2First = semifinalMode === 'fixed_bracket' ? qf2 : seed2!.match;
+      const semi2Second = semifinalMode === 'fixed_bracket' ? qf4 : seed4!.match;
 
       await c.env.DB.prepare('UPDATE matches SET team1_id = ?, team2_id = ? WHERE id = ?')
-        .bind(seed1.match.winner_id, seed3.match.winner_id, semi1Id)
+        .bind(semi1First.winner_id, semi1Second.winner_id, semi1Id)
         .run();
       await c.env.DB.prepare('UPDATE matches SET team1_id = ?, team2_id = ? WHERE id = ?')
-        .bind(seed2.match.winner_id, seed4.match.winner_id, semi2Id)
+        .bind(semi2First.winner_id, semi2Second.winner_id, semi2Id)
         .run();
 
       await c.env.DB.prepare('UPDATE matches SET next_match_id = ?, next_match_slot = 1 WHERE id = ?')
@@ -902,16 +948,16 @@ matchRoutes.post('/tournaments/:tournamentId/round3/generate-knockout', requireA
         .run();
 
       await c.env.DB.prepare('UPDATE matches SET next_match_id = ?, next_match_slot = 1 WHERE id = ?')
-        .bind(semi1Id, seed1.match.id)
+        .bind(semi1Id, semi1First.id)
         .run();
       await c.env.DB.prepare('UPDATE matches SET next_match_id = ?, next_match_slot = 2 WHERE id = ?')
-        .bind(semi1Id, seed3.match.id)
+        .bind(semi1Id, semi1Second.id)
         .run();
       await c.env.DB.prepare('UPDATE matches SET next_match_id = ?, next_match_slot = 1 WHERE id = ?')
-        .bind(semi2Id, seed2.match.id)
+        .bind(semi2Id, semi2First.id)
         .run();
       await c.env.DB.prepare('UPDATE matches SET next_match_id = ?, next_match_slot = 2 WHERE id = ?')
-        .bind(semi2Id, seed4.match.id)
+        .bind(semi2Id, semi2Second.id)
         .run();
       created[tier] = 4;
     }
@@ -1011,9 +1057,9 @@ matchRoutes.post('/tournaments/:tournamentId/auto-schedule', requireAdmin, requi
 // Final winner/runner-up and playoff match breakdown per tier for Round 3/4.
 matchRoutes.get('/tournaments/:tournamentId/tier-results', async (c) => {
   const tournamentId = c.req.param('tournamentId');
-  const tournament = await c.env.DB.prepare('SELECT series_stage FROM tournaments WHERE id = ?')
+  const tournament = await c.env.DB.prepare('SELECT series_stage, playoff_seeding FROM tournaments WHERE id = ?')
     .bind(tournamentId)
-    .first<{ series_stage: string | null }>();
+    .first<{ series_stage: string | null; playoff_seeding: string }>();
   const isSeriesPlayoffs = tournament?.series_stage === 'playoffs';
   const { results } = await c.env.DB.prepare(
         `SELECT m.id, m.stage, m.bracket_type as tier, m.round, m.match_number,
@@ -1180,6 +1226,7 @@ matchRoutes.get('/tournaments/:tournamentId/tier-results', async (c) => {
 
       return {
         tier,
+        semifinalMode: tournament?.playoff_seeding ?? 'score_reseed',
         completed: finalMatch?.status === 'completed',
         winner: winnerName,
         runnerUp: runnerUpName,

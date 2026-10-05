@@ -15,6 +15,7 @@ interface Tournament {
   end_date: string | null;
   series_id?: number | null;
   series_stage?: string | null;
+  playoff_seeding?: 'score_reseed' | 'fixed_bracket';
 }
 interface Team {
   id: number;
@@ -292,6 +293,7 @@ export function AdminTournamentManage() {
   const [tierCount, setTierCount] = useState(4);
   const [teamsPerTier, setTeamsPerTier] = useState<number | ''>('');
   const [topCount, setTopCount] = useState(4);
+  const [semifinalMode, setSemifinalMode] = useState<'score_reseed' | 'fixed_bracket'>('score_reseed');
   const [error, setError] = useState<string | null>(null);
 
   // Fancy Pop-up notification state
@@ -346,6 +348,7 @@ export function AdminTournamentManage() {
       setEditStatus(tour.status);
       setEditStartDate(tour.start_date ?? '');
       setEditEndDate(tour.end_date ?? '');
+      setSemifinalMode(tour.playoff_seeding ?? 'score_reseed');
       setTeams(teamsRes.teams);
       setCourts(courtsRes.courts);
       setMatches(matchesRes.matches);
@@ -991,6 +994,18 @@ export function AdminTournamentManage() {
                 4 teams: seeds 1 vs 3 and 2 vs 4, then a final. 8 teams: four quarterfinals, reseeded semifinals, then a final.
               </small>
             )}
+            {isSeriesPlayoffs && (teamsPerTier === '' || teamsPerTier === 8) && (
+              <label>
+                Semifinal pairing
+                <select
+                  value={semifinalMode}
+                  onChange={(event) => setSemifinalMode(event.target.value as 'score_reseed' | 'fixed_bracket')}
+                >
+                  <option value="score_reseed">Re-seed winners by point differential (1 vs 3, 2 vs 4)</option>
+                  <option value="fixed_bracket">Fixed bracket (QF 1 vs 3, QF 2 vs 4)</option>
+                </select>
+              </label>
+            )}
             <label>
               Round 2 Start Time
               <input
@@ -1027,6 +1042,7 @@ export function AdminTournamentManage() {
                   }>(`/api/tournaments/${id}/round2/generate-tiers`, {
                     tierCount,
                     teamsPerTier: teamsPerTier !== '' ? Number(teamsPerTier) : undefined,
+                    semifinalMode,
                     startTime: r2StartTime,
                     endTime: r2EndTime,
                   });
@@ -1054,7 +1070,11 @@ export function AdminTournamentManage() {
           <h2>Round 3 &amp; 4 — Playoff Knockout</h2>
           <p>
             {isSeriesPlayoffs
-              ? 'With 4 teams per tier, the Round 2 semifinals feed directly into a Round 3 final. With 8 teams, four Round 2 quarterfinal winners are reseeded into Round 3 semifinals, followed by a Round 4 final.'
+              ? teamsPerTier === 4
+                ? 'The two Round 2 semifinals feed directly into the Round 3 final.'
+                : semifinalMode === 'fixed_bracket'
+                  ? 'Quarterfinal 1 and 3 winners meet in Semifinal 1; Quarterfinal 2 and 4 winners meet in Semifinal 2. The semifinal winners meet in the Round 4 final.'
+                  : 'The four Round 2 quarterfinal winners are reseeded by point differential into Round 3 semifinals, followed by a Round 4 final.'
               : 'Takes the top qualifying teams from each active tier\'s Round 2 standings into a knockout bracket. With four qualifiers, the semifinals are seed 1 vs 3 and seed 2 vs 4.'}
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1rem' }}>
@@ -1111,7 +1131,9 @@ export function AdminTournamentManage() {
                   successMsg: isSeriesPlayoffs
                     ? teamsPerTier === 4
                       ? 'Round 3 finals generated from the Round 2 semifinal winners.'
-                      : 'Round 3 semifinals and Round 4 finals generated for each tier.'
+                      : semifinalMode === 'fixed_bracket'
+                        ? 'Round 3 semifinals and Round 4 finals generated using the fixed bracket.'
+                        : 'Round 3 semifinals and Round 4 finals generated for each tier.'
                     : `Playoff knockout bracket generated successfully for top ${topCount} qualifying teams per tier!`,
                   title: 'Generate Playoffs',
                 }

@@ -70,6 +70,7 @@ interface PlayoffMatch {
 
 interface TierResult {
   tier: string;
+  semifinalMode?: 'score_reseed' | 'fixed_bracket';
   completed: boolean;
   winner: string | null;
   runnerUp: string | null;
@@ -133,7 +134,10 @@ function PlayoffTreeMatch({ node }: { node: PlayoffTreeNode }) {
   );
 }
 
-function PlayoffReseedPreview({ matches }: { matches: PlayoffMatch[] }) {
+function PlayoffReseedPreview({ matches, semifinalMode = 'score_reseed' }: {
+  matches: PlayoffMatch[];
+  semifinalMode?: 'score_reseed' | 'fixed_bracket';
+}) {
   const openingMatches = matches.filter((match) => match.stage === 2).sort((a, b) => a.matchNumber - b.matchNumber);
   const rankedWinners = openingMatches
     .filter((match) => match.status === 'completed' && match.winnerName && match.winnerPointDifferential !== null)
@@ -142,6 +146,14 @@ function PlayoffReseedPreview({ matches }: { matches: PlayoffMatch[] }) {
     )
     .map((match) => match.winnerName!);
   const seededName = (seed: number) => `Seed ${seed}: ${rankedWinners[seed - 1] ?? 'TBD'}`;
+  const qualifierWinnerName = (matchNumber: number) =>
+    openingMatches.find((match) => match.matchNumber === matchNumber)?.winnerName ?? `Winner QF ${matchNumber}`;
+  const semifinalOneTeams = semifinalMode === 'fixed_bracket'
+    ? [qualifierWinnerName(1), qualifierWinnerName(3)]
+    : [seededName(1), seededName(3)];
+  const semifinalTwoTeams = semifinalMode === 'fixed_bracket'
+    ? [qualifierWinnerName(2), qualifierWinnerName(4)]
+    : [seededName(2), seededName(4)];
   const projectedMatch = (
     id: number,
     stage: number,
@@ -172,6 +184,16 @@ function PlayoffReseedPreview({ matches }: { matches: PlayoffMatch[] }) {
     },
     feeders: [null, null],
   });
+  const renderQualifierMatch = (matchNumber: number, className: string) => {
+    const match = openingMatches.find((candidate) => candidate.matchNumber === matchNumber);
+    if (!match) return null;
+    return (
+      <div className={className} key={match.id}>
+        <PlayoffTreeMatch node={{ match, feeders: [null, null] }} />
+        <span className="playoff-fixed-grid__outgoing" aria-hidden="true" />
+      </div>
+    );
+  };
 
   if (openingMatches.length === 2) {
     const final = projectedMatch(-4, 3, 1, 'Final', 'Winner Semifinal 1', 'Winner Semifinal 2', true);
@@ -190,37 +212,72 @@ function PlayoffReseedPreview({ matches }: { matches: PlayoffMatch[] }) {
         <div>
           <h4>Semifinals</h4>
           <div className="playoff-reseed-preview__rule">
-            <strong>Provisional seeds: {rankedWinners.length} of 4 qualifier winners</strong>
-            <span>Ranked by point differential; ties retain qualifier match order</span>
+            {semifinalMode === 'fixed_bracket' ? (
+              <>
+                <strong>Fixed bracket</strong>
+                <span>QF 1 vs QF 3; QF 2 vs QF 4</span>
+              </>
+            ) : (
+              <>
+                <strong>Provisional seeds: {rankedWinners.length} of 4 qualifier winners</strong>
+                <span>Ranked by point differential; ties retain qualifier match order</span>
+              </>
+            )}
           </div>
         </div>
         <h4>Final</h4>
       </div>
-      <div className="playoff-reseed-preview__grid">
-        {openingMatches.map((match, index) => (
-          <div
-            className={`playoff-reseed-preview__match playoff-reseed-preview__match--qualifier-${index + 1}`}
-            key={match.id}
-          >
-            <PlayoffTreeMatch node={{ match, feeders: [null, null] }} />
-            <span className="playoff-reseed-preview__connector playoff-reseed-preview__connector--to-reseed" aria-hidden="true" />
+      {semifinalMode === 'fixed_bracket' ? (
+        <div className="playoff-fixed-grid">
+          {renderQualifierMatch(1, 'playoff-fixed-grid__qualifier playoff-fixed-grid__qualifier--1')}
+          {renderQualifierMatch(3, 'playoff-fixed-grid__qualifier playoff-fixed-grid__qualifier--3')}
+          {renderQualifierMatch(2, 'playoff-fixed-grid__qualifier playoff-fixed-grid__qualifier--2')}
+          {renderQualifierMatch(4, 'playoff-fixed-grid__qualifier playoff-fixed-grid__qualifier--4')}
+          <div className="playoff-fixed-grid__semi playoff-fixed-grid__semi--1">
+            <span className="playoff-fixed-grid__rail" aria-hidden="true" />
+            <span className="playoff-fixed-grid__incoming" aria-hidden="true" />
+            <PlayoffTreeMatch node={projectedMatch(-2, 3, 1, 'Semifinal 1', qualifierWinnerName(1), qualifierWinnerName(3), false, true)} />
+            <span className="playoff-fixed-grid__to-final" aria-hidden="true" />
           </div>
-        ))}
-        <div className="playoff-reseed-preview__match playoff-reseed-preview__match--semi-1">
-          <PlayoffTreeMatch node={projectedMatch(-2, 3, 1, 'Semifinal 1', seededName(1), seededName(3), false, true)} />
-          <span className="playoff-reseed-preview__connector playoff-reseed-preview__connector--from-reseed" aria-hidden="true" />
-          <span className="playoff-reseed-preview__connector playoff-reseed-preview__connector--to-final" aria-hidden="true" />
+          <div className="playoff-fixed-grid__semi playoff-fixed-grid__semi--2">
+            <span className="playoff-fixed-grid__rail" aria-hidden="true" />
+            <span className="playoff-fixed-grid__incoming" aria-hidden="true" />
+            <PlayoffTreeMatch node={projectedMatch(-3, 3, 2, 'Semifinal 2', qualifierWinnerName(2), qualifierWinnerName(4), false, true)} />
+            <span className="playoff-fixed-grid__to-final" aria-hidden="true" />
+          </div>
+          <div className="playoff-fixed-grid__final">
+            <span className="playoff-fixed-grid__final-rail" aria-hidden="true" />
+            <span className="playoff-fixed-grid__final-incoming" aria-hidden="true" />
+            <PlayoffTreeMatch node={projectedMatch(-4, 4, 1, 'Final', 'Winner Semifinal 1', 'Winner Semifinal 2', true)} />
+          </div>
         </div>
-        <div className="playoff-reseed-preview__match playoff-reseed-preview__match--semi-2">
-          <PlayoffTreeMatch node={projectedMatch(-3, 3, 2, 'Semifinal 2', seededName(2), seededName(4), false, true)} />
-          <span className="playoff-reseed-preview__connector playoff-reseed-preview__connector--from-reseed" aria-hidden="true" />
-          <span className="playoff-reseed-preview__connector playoff-reseed-preview__connector--to-final" aria-hidden="true" />
+      ) : (
+        <div className="playoff-reseed-preview__grid">
+          {openingMatches.map((match, index) => (
+            <div
+              className={`playoff-reseed-preview__match playoff-reseed-preview__match--qualifier-${index + 1}`}
+              key={match.id}
+            >
+              <PlayoffTreeMatch node={{ match, feeders: [null, null] }} />
+              <span className="playoff-reseed-preview__connector playoff-reseed-preview__connector--to-reseed" aria-hidden="true" />
+            </div>
+          ))}
+          <div className="playoff-reseed-preview__match playoff-reseed-preview__match--semi-1">
+            <PlayoffTreeMatch node={projectedMatch(-2, 3, 1, 'Semifinal 1', semifinalOneTeams[0], semifinalOneTeams[1], false, true)} />
+            <span className="playoff-reseed-preview__connector playoff-reseed-preview__connector--from-reseed" aria-hidden="true" />
+            <span className="playoff-reseed-preview__connector playoff-reseed-preview__connector--to-final" aria-hidden="true" />
+          </div>
+          <div className="playoff-reseed-preview__match playoff-reseed-preview__match--semi-2">
+            <PlayoffTreeMatch node={projectedMatch(-3, 3, 2, 'Semifinal 2', semifinalTwoTeams[0], semifinalTwoTeams[1], false, true)} />
+            <span className="playoff-reseed-preview__connector playoff-reseed-preview__connector--from-reseed" aria-hidden="true" />
+            <span className="playoff-reseed-preview__connector playoff-reseed-preview__connector--to-final" aria-hidden="true" />
+          </div>
+          <div className="playoff-reseed-preview__match playoff-reseed-preview__match--final">
+            <PlayoffTreeMatch node={projectedMatch(-4, 4, 1, 'Final', 'Winner Semifinal 1', 'Winner Semifinal 2', true)} />
+            <span className="playoff-reseed-preview__connector playoff-reseed-preview__connector--from-semis" aria-hidden="true" />
+          </div>
         </div>
-        <div className="playoff-reseed-preview__match playoff-reseed-preview__match--final">
-          <PlayoffTreeMatch node={projectedMatch(-4, 4, 1, 'Final', 'Winner Semifinal 1', 'Winner Semifinal 2', true)} />
-          <span className="playoff-reseed-preview__connector playoff-reseed-preview__connector--from-semis" aria-hidden="true" />
-        </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -734,11 +791,11 @@ export function TournamentDetail() {
                   </header>
                   {showDirectFinalPreview ? (
                     <div className="playoff-bracket__scroll">
-                      <PlayoffReseedPreview matches={tierMatches} />
+                      <PlayoffReseedPreview matches={tierMatches} semifinalMode={result.semifinalMode} />
                     </div>
                   ) : showReseedPreview ? (
                     <div className="playoff-bracket__scroll">
-                      <PlayoffReseedPreview matches={tierMatches} />
+                      <PlayoffReseedPreview matches={tierMatches} semifinalMode={result.semifinalMode} />
                     </div>
                   ) : trees.length > 0 ? (
                     <div className="playoff-bracket__scroll">
