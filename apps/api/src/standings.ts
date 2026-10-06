@@ -22,6 +22,7 @@ export interface StandingRow {
   losses: number;
   pointDifferential: number;
   tier: Tier | null;
+  withdrawn: boolean;
 }
 
 interface TeamRow {
@@ -30,6 +31,7 @@ interface TeamRow {
   pool: string | null;
   tier: Tier | null;
   seed: number | null;
+  withdrawn: number;
   qualifier_wins: number;
   qualifier_point_differential: number;
 }
@@ -38,7 +40,7 @@ interface TeamRow {
 // stage (1 = Round 1 random-group pool play, 2 = Round 2 tier round-robin).
 async function computeTeamStats(db: Env['DB'], tournamentId: string | number, stage: number) {
   const { results: teams } = await db
-    .prepare('SELECT id, name, pool, tier, seed, qualifier_wins, qualifier_point_differential FROM teams WHERE tournament_id = ?')
+    .prepare('SELECT id, name, pool, tier, seed, withdrawn, qualifier_wins, qualifier_point_differential FROM teams WHERE tournament_id = ?')
     .bind(tournamentId)
     .all<TeamRow>();
 
@@ -102,6 +104,7 @@ async function computeTeamStats(db: Env['DB'], tournamentId: string | number, st
     wins: s.wins,
     losses: s.losses,
     pointDifferential: s.pointsFor - s.pointsAgainst,
+    withdrawn: s.team.withdrawn === 1,
   }));
 }
 
@@ -171,7 +174,7 @@ export async function computePoolStandings(db: Env['DB'], tournamentId: string |
   const stageOneRows = await computeTeamStats(db, tournamentId, 1);
   const rows = await includeAdditionalPoolRoundStats(db, tournamentId, stageOneRows);
   return rows
-    .filter((r) => r.pool !== null)
+    .filter((r) => r.pool !== null && !r.withdrawn)
     .sort(
       (a, b) =>
         (a.pool ?? '').localeCompare(b.pool ?? '') ||
@@ -189,12 +192,12 @@ export async function computeOverallRanking(db: Env['DB'], tournamentId: string 
     .first<{ series_stage: string | null }>();
   if (tournament?.series_stage === 'playoffs') {
     return stageOneRows
-      .filter((row) => row.pool !== null)
+      .filter((row) => row.pool !== null && !row.withdrawn)
       .sort((a, b) => (a.seed ?? Number.MAX_SAFE_INTEGER) - (b.seed ?? Number.MAX_SAFE_INTEGER));
   }
   const rows = await includeAdditionalPoolRoundStats(db, tournamentId, stageOneRows);
   return rows
-    .filter((r) => r.pool !== null)
+    .filter((r) => r.pool !== null && !r.withdrawn)
     .sort(
       (a, b) =>
         b.wins - a.wins ||
@@ -276,7 +279,7 @@ export async function computeTierStandings(db: Env['DB'], tournamentId: string |
       ? await computeSeriesQualifierStats(db, tournament.series_id)
       : new Map<string, { wins: number; losses: number; pointDifferential: number }>();
     return stage2Rows
-      .filter((row) => row.tier !== null)
+      .filter((row) => row.tier !== null && !row.withdrawn)
       .map((row) => {
         const currentStats = qualifierStats.get(row.teamName.trim().toLowerCase());
         const savedStats = stage1Map.get(row.teamId);
@@ -295,7 +298,7 @@ export async function computeTierStandings(db: Env['DB'], tournamentId: string |
   }
 
   return stage2Rows
-    .filter((r) => r.tier !== null)
+    .filter((r) => r.tier !== null && !r.withdrawn)
     .sort((a, b) => {
       const tierDiff = (TIER_ORDER[a.tier ?? ''] ?? 99) - (TIER_ORDER[b.tier ?? ''] ?? 99);
       if (tierDiff !== 0) return tierDiff;

@@ -1,0 +1,2 @@
+ALTER TABLE teams ADD COLUMN withdrawn INTEGER NOT NULL DEFAULT 0
+  CHECK (withdrawn IN (0, 1));

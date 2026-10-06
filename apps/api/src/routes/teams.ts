@@ -81,6 +81,132 @@ teamRoutes.patch('/teams/:id', requireAdmin, requireTournamentManager((c) => res
   return c.json({ team: updated });
 });
 
+teamRoutes.post('/teams/:id/withdraw', requireAdmin, requireTournamentManager((c) => resolveTeamTournamentId(c.env.DB, c.req.param('id'))), async (c) => {
+  const id = Number(c.req.param('id'));
+  const team = await c.env.DB.prepare(
+    'SELECT id, tournament_id, name, seed, tier, withdrawn FROM teams WHERE id = ?'
+  )
+    .bind(id)
+    .first<{
+      id: number;
+      tournament_id: number;
+      name: string;
+      seed: number | null;
+      tier: string | null;
+      withdrawn: number;
+    }>();
+  if (!team) return c.json({ error: 'Team not found' }, 404);
+  if (team.withdrawn) return c.json({ error: 'Team is already withdrawn' }, 409);
+  if (!team.tier || team.seed === null) return c.json({ error: 'Only an active playoff team can be withdrawn' }, 400);
+
+  const tournament = await c.env.DB.prepare('SELECT series_stage FROM tournaments WHERE id = ?')
+    .bind(team.tournament_id)
+    .first<{ series_stage: string | null }>();
+  if (tournament?.series_stage !== 'playoffs') return c.json({ error: 'Team withdrawal is only available for series playoffs' }, 400);
+
+  const startedMatch = await c.env.DB.prepare(
+    `SELECT id FROM matches WHERE tournament_id = ? AND stage >= 2 AND status != 'scheduled' LIMIT 1`
+  )
+    .bind(team.tournament_id)
+    .first<{ id: number }>();
+  if (startedMatch) return c.json({ error: 'Cannot withdraw a team after playoff matches have started' }, 409);
+
+  const { results: playoffTeams } = await c.env.DB.prepare(
+    `SELECT id, name, seed, tier, withdrawn FROM teams WHERE tournament_id = ? ORDER BY seed, id`
+  )
+    .bind(team.tournament_id)
+    .all<{ id: number; name: string; seed: number | null; tier: string | null; withdrawn: number }>();
+  const { results: stageTwoMatchCounts } = await c.env.DB.prepare(
+    `SELECT bracket_type, COUNT(*) AS matches FROM matches
+     WHERE tournament_id = ? AND stage = 2 GROUP BY bracket_type`
+  )
+    .bind(team.tournament_id)
+    .all<{ bracket_type: string; matches: number }>();
+  const matchCountByTier = new Map(stageTwoMatchCounts.map((row) => [row.bracket_type, row.matches]));
+  const currentTierSizes = new Map<string, number>();
+  for (const tier of new Set(playoffTeams.map((playoffTeam) => playoffTeam.tier).filter(Boolean))) {
+    const matchCount = matchCountByTier.get(tier!);
+    const activeCount = playoffTeams.filter((playoffTeam) => playoffTeam.tier === tier && !playoffTeam.withdrawn).length;
+    const capacity = matchCount === 2 ? 4 : matchCount === 4 ? 8 : activeCount;
+    currentTierSizes.set(tier!, capacity);
+  }
+  const tierOrder = ['platinum', 'gold', 'silver', 'bronze'];
+  const orderedTiers = tierOrder.filter((tier) => currentTierSizes.has(tier));
+  if (!orderedTiers.includes(team.tier)) return c.json({ error: 'The team tier is invalid' }, 409);
+
+  const orderedActiveTeams = playoffTeams
+    .filter((playoffTeam) => playoffTeam.id !== team.id && !playoffTeam.withdrawn)
+    .sort((a, b) => (a.seed ?? Number.MAX_SAFE_INTEGER) - (b.seed ?? Number.MAX_SAFE_INTEGER) || a.id - b.id);
+  const promotedTeam = orderedActiveTeams.find((playoffTeam) => (playoffTeam.seed ?? Number.MAX_SAFE_INTEGER) > team.seed!);
+  if (!promotedTeam) return c.json({ error: 'No team is queued after this seed to promote' }, 409);
+
+  const totalTierSlots = [...currentTierSizes.values()].reduce((total, size) => total + size, 0);
+  if (orderedActiveTeams.length < totalTierSlots) {
+    return c.json({ error: 'There are not enough active reserve teams to fill all playoff tiers' }, 409);
+  }
+
+  const reseededTeams = orderedActiveTeams.map((playoffTeam, index) => ({
+    ...playoffTeam,
+    seed: index + 1,
+  }));
+  const teamTierUpdates = new Map<number, string | null>();
+  let tierOffset = 0;
+  for (const tier of orderedTiers) {
+    const tierSize = currentTierSizes.get(tier)!;
+    for (const playoffTeam of reseededTeams.slice(tierOffset, tierOffset + tierSize)) {
+      teamTierUpdates.set(playoffTeam.id, tier);
+    }
+    tierOffset += tierSize;
+  }
+
+  const stageTwoMatches = [] as { id: number; bracket_type: string; match_number: number }[];
+  for (const tier of orderedTiers) {
+    const { results } = await c.env.DB.prepare(
+      `SELECT id, bracket_type, match_number FROM matches
+       WHERE tournament_id = ? AND stage = 2 AND bracket_type = ? ORDER BY match_number`
+    )
+      .bind(team.tournament_id, tier)
+      .all<{ id: number; bracket_type: string; match_number: number }>();
+    const expected = currentTierSizes.get(tier) === 4 ? 2 : 4;
+    if (results.length !== 0 && results.length !== expected) {
+      return c.json({ error: `The ${tier} bracket is incomplete; regenerate Round 2 before promoting a reserve` }, 409);
+    }
+    stageTwoMatches.push(...results);
+  }
+
+  const statements = [
+    c.env.DB.prepare('UPDATE teams SET withdrawn = 1 WHERE id = ?').bind(team.id),
+    ...reseededTeams.map((playoffTeam) => c.env.DB.prepare('UPDATE teams SET seed = ?, tier = ? WHERE id = ?')
+      .bind(playoffTeam.seed, teamTierUpdates.get(playoffTeam.id) ?? null, playoffTeam.id)),
+  ];
+  if (stageTwoMatches.length > 0) {
+    for (const tier of orderedTiers) {
+      const tierTeams = reseededTeams.filter((playoffTeam) => teamTierUpdates.get(playoffTeam.id) === tier);
+      const tierMatches = stageTwoMatches.filter((match) => match.bracket_type === tier).sort((a, b) => a.match_number - b.match_number);
+      if (tierMatches.length === 0) continue;
+      const pairings = tierTeams.length === 4
+        ? [[tierTeams[0], tierTeams[2]], [tierTeams[1], tierTeams[3]]]
+        : Array.from({ length: 4 }, (_, index) => [tierTeams[index], tierTeams[index + 4]]);
+      tierMatches.forEach((match, index) => {
+        statements.push(
+          c.env.DB.prepare('UPDATE matches SET team1_id = ?, team2_id = ? WHERE id = ?')
+            .bind(pairings[index][0].id, pairings[index][1].id, match.id)
+        );
+      });
+    }
+  }
+  await c.env.DB.batch(statements);
+
+  return c.json({
+    ok: true,
+    withdrawn_team: team.name,
+    promoted_team: promotedTeam.name,
+    promoted_from_seed: promotedTeam.seed,
+    promoted_to_seed: team.seed,
+    tier: teamTierUpdates.get(promotedTeam.id) ?? null,
+  });
+});
+
 teamRoutes.delete('/teams/:id', requireAdmin, requireTournamentManager((c) => resolveTeamTournamentId(c.env.DB, c.req.param('id'))), async (c) => {
   const id = c.req.param('id');
   // Delete all matches involving this team (whether team1, team2, or winner)

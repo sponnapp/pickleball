@@ -21,6 +21,7 @@ interface Team {
   pool: string | null;
   tier: 'platinum' | 'gold' | 'silver' | 'bronze' | null;
   seed: number | null;
+  withdrawn?: number;
 }
 interface Match {
   id: number;
@@ -585,7 +586,7 @@ export function TournamentDetail() {
           <h2>Teams</h2>
           {(() => {
             const visibleTeams = tournament.series_stage === 'playoffs'
-              ? teams.filter((team) => team.tier !== null)
+                      ? teams.filter((team) => team.tier !== null && !team.withdrawn)
               : teams;
             const teamGroups = visibleTeams.reduce<Record<string, Team[]>>((acc, t) => {
               const key = tournament.series_stage === 'playoffs' ? t.tier ?? 'Unassigned' : t.pool ?? 'Ungrouped';

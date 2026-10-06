@@ -510,6 +510,7 @@ interface PlayoffSnapshotTeam {
   pool: string | null;
   seed: number | null;
   tier: Tier | null;
+  withdrawn: number;
 }
 
 async function refreshGeneratedSeriesPlayoff(db: Env['DB'], seriesId: number) {
@@ -550,7 +551,7 @@ async function refreshGeneratedSeriesPlayoff(db: Env['DB'], seriesId: number) {
   );
 
   const { results: playoffTeams } = await db.prepare(
-    `SELECT id, name, player1_name, player2_name, pool, seed, tier
+    `SELECT id, name, player1_name, player2_name, pool, seed, tier, withdrawn
      FROM teams WHERE tournament_id = ? ORDER BY seed`
   )
     .bind(playoff.id)
@@ -573,19 +574,36 @@ async function refreshGeneratedSeriesPlayoff(db: Env['DB'], seriesId: number) {
   if (snapshot.some((entry) => !entry.team)) return;
 
   const tierOrder: Tier[] = ['platinum', 'gold', 'silver', 'bronze'];
-  const tierSizes = new Map(tierOrder.map((tier) => [tier, playoffTeams.filter((team) => team.tier === tier).length]));
+  const { results: stageTwoMatchCounts } = await db.prepare(
+    `SELECT bracket_type, COUNT(*) AS matches FROM matches
+     WHERE tournament_id = ? AND stage = 2 GROUP BY bracket_type`
+  )
+    .bind(playoff.id)
+    .all<{ bracket_type: string; matches: number }>();
+  const matchCountByTier = new Map(stageTwoMatchCounts.map((row) => [row.bracket_type, row.matches]));
+  const tierSizes = new Map(tierOrder.map((tier) => {
+    const matchCount = matchCountByTier.get(tier);
+    const assignedCount = playoffTeams.filter((team) => team.tier === tier).length;
+    const capacity = matchCount === 2 ? 4 : matchCount === 4 ? 8 : assignedCount;
+    return [tier, capacity] as const;
+  }));
+  let activeSeed = 0;
   const refreshed = snapshot.map((entry) => {
+    if (entry.team!.withdrawn) {
+      return { ...entry, seed: entry.team!.seed ?? entry.seed, tier: entry.team!.tier };
+    }
+    const seed = ++activeSeed;
     let tier: Tier | null = null;
     let tierStart = 0;
     for (const candidate of tierOrder) {
       const tierEnd = tierStart + (tierSizes.get(candidate) ?? 0);
-      if (entry.seed - 1 >= tierStart && entry.seed - 1 < tierEnd) {
+      if (seed - 1 >= tierStart && seed - 1 < tierEnd) {
         tier = candidate;
         break;
       }
       tierStart = tierEnd;
     }
-    return { ...entry, tier };
+    return { ...entry, seed, tier };
   });
 
   const { results: playoffMatches } = await db.prepare(
@@ -596,10 +614,14 @@ async function refreshGeneratedSeriesPlayoff(db: Env['DB'], seriesId: number) {
     .all<{ id: number; stage: number; bracket_type: string; round: number; match_number: number; status: string }>();
   if (playoffMatches.some((match) => match.status !== 'scheduled')) return;
 
-  const statements = refreshed.map(({ ranked, team, seed, tier }) => db.prepare(
-    `UPDATE teams SET seed = ?, pool = ?, qualifier_wins = ?, qualifier_point_differential = ?, tier = ?
-     WHERE id = ?`
-  ).bind(seed, ranked.pool, ranked.wins, ranked.pointDifferential, tier, team!.id));
+  const statements = refreshed.map(({ ranked, team, seed, tier }) => team!.withdrawn
+    ? db.prepare(
+      'UPDATE teams SET qualifier_wins = ?, qualifier_point_differential = ? WHERE id = ?'
+    ).bind(ranked.wins, ranked.pointDifferential, team!.id)
+    : db.prepare(
+      `UPDATE teams SET seed = ?, pool = ?, qualifier_wins = ?, qualifier_point_differential = ?, tier = ?
+       WHERE id = ?`
+    ).bind(seed, ranked.pool, ranked.wins, ranked.pointDifferential, tier, team!.id));
 
   for (const tier of tierOrder) {
     const tierTeams = refreshed.filter((entry) => entry.tier === tier).sort((a, b) => a.seed - b.seed);

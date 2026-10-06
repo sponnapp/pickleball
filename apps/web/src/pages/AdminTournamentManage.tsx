@@ -25,6 +25,7 @@ interface Team {
   seed: number | null;
   pool: string | null;
   tier?: string | null;
+  withdrawn?: number;
 }
 interface Court {
   id: number;
@@ -597,6 +598,27 @@ export function AdminTournamentManage() {
     );
   };
 
+  const withdrawPlayoffTeam = (team: Team) => {
+    if (team.seed === null) return;
+    const nextTeam = teams
+      .filter((candidate) => !candidate.withdrawn && candidate.seed !== null && candidate.seed > team.seed!)
+      .sort((a, b) => a.seed! - b.seed!)[0];
+    if (!nextTeam) {
+      setPopup({ type: 'error', title: 'No Reserve Available', message: 'There is no team after this seed in the queue.' });
+      return;
+    }
+    if (!window.confirm(
+      `Withdraw ${team.name} at seed ${team.seed}? ${nextTeam.name} moves from seed ${nextTeam.seed} to seed ${team.seed}, and the following seeds shift up.`
+    )) return;
+    runAction(
+      () => api.post(`/api/teams/${team.id}/withdraw`, {}),
+      {
+        successMsg: `${nextTeam.name} moved from seed ${nextTeam.seed} to seed ${team.seed}; following seeds shifted up.`,
+        title: 'Playoff Queue Updated',
+      }
+    );
+  };
+
   if (!tournament) return <p>Loading...</p>;
   if (accessDenied) return <p className="error">You are not assigned to manage this tournament.</p>;
   const isSeriesPlayoffs = tournament.series_stage === 'playoffs';
@@ -720,7 +742,7 @@ export function AdminTournamentManage() {
                   <th>Player 1</th>
                   <th>Player 2</th>
                   <th>Seed</th>
-                  <th>Group</th>
+                  <th>{isSeriesPlayoffs ? 'Tier / Queue' : 'Group'}</th>
                   <th></th>
                 </tr>
               </thead>
@@ -737,18 +759,14 @@ export function AdminTournamentManage() {
                     <td>
                       <input
                         defaultValue={t.player1_name}
-                        onBlur={(e) =>
-                          runAction(() => api.patch(`/api/teams/${t.id}`, { player1_name: e.target.value }))
-                        }
+                        onBlur={(e) => runAction(() => api.patch(`/api/teams/${t.id}`, { player1_name: e.target.value }))}
                         style={{ minWidth: '7rem' }}
                       />
                     </td>
                     <td>
                       <input
                         defaultValue={t.player2_name ?? ''}
-                        onBlur={(e) =>
-                          runAction(() => api.patch(`/api/teams/${t.id}`, { player2_name: e.target.value || null }))
-                        }
+                        onBlur={(e) => runAction(() => api.patch(`/api/teams/${t.id}`, { player2_name: e.target.value || null }))}
                         style={{ minWidth: '7rem' }}
                       />
                     </td>
@@ -761,14 +779,26 @@ export function AdminTournamentManage() {
                       />
                     </td>
                     <td>
-                      <input
-                        defaultValue={t.pool ?? ''}
-                        onBlur={(e) => runAction(() => api.patch(`/api/teams/${t.id}`, { pool: e.target.value }))}
-                        style={{ width: '3.5rem' }}
-                      />
+                      {isSeriesPlayoffs ? (
+                        <span className={`tag ${t.withdrawn ? 'tag--outline' : ''}`}>
+                          {t.withdrawn ? 'Withdrawn' : t.tier ?? 'Reserve'}
+                        </span>
+                      ) : (
+                        <input
+                          defaultValue={t.pool ?? ''}
+                          onBlur={(e) => runAction(() => api.patch(`/api/teams/${t.id}`, { pool: e.target.value }))}
+                          style={{ width: '3.5rem' }}
+                        />
+                      )}
                     </td>
                     <td>
-                      <button onClick={() => runAction(() => api.delete(`/api/teams/${t.id}`))}>Remove</button>
+                      {isSeriesPlayoffs && t.tier && !t.withdrawn && (
+                        <button type="button" className="button--outline" onClick={() => withdrawPlayoffTeam(t)}>
+                          Withdraw &amp; promote next seed
+                        </button>
+                      )}
+                      {isSeriesPlayoffs && t.withdrawn && <span className="tag tag--outline">Withdrawn</span>}{' '}
+                      <button type="button" onClick={() => runAction(() => api.delete(`/api/teams/${t.id}`))}>Remove</button>
                     </td>
                   </tr>
                 ))}
