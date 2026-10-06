@@ -773,8 +773,21 @@ export function AdminTournamentManage() {
                     <td>
                       <input
                         type="number"
+                        min={1}
                         defaultValue={t.seed ?? ''}
-                        onBlur={(e) => runAction(() => api.patch(`/api/teams/${t.id}`, { seed: Number(e.target.value) }))}
+                        onBlur={(e) => {
+                          const rawValue = e.target.value.trim();
+                          if (rawValue === '') {
+                            if (t.seed !== null) runAction(() => api.patch(`/api/teams/${t.id}`, { seed: null }));
+                            return;
+                          }
+                          const seed = Number(rawValue);
+                          if (!Number.isInteger(seed) || seed < 1) {
+                            e.currentTarget.value = t.seed === null ? '' : String(t.seed);
+                            return;
+                          }
+                          if (seed !== t.seed) runAction(() => api.patch(`/api/teams/${t.id}`, { seed }));
+                        }}
                         style={{ width: '4rem' }}
                       />
                     </td>
@@ -797,7 +810,7 @@ export function AdminTournamentManage() {
                           Withdraw &amp; promote next seed
                         </button>
                       )}
-                      {isSeriesPlayoffs && t.withdrawn && <span className="tag tag--outline">Withdrawn</span>}{' '}
+                      {isSeriesPlayoffs && Boolean(t.withdrawn) && <span className="tag tag--outline">Withdrawn</span>}{' '}
                       <button type="button" onClick={() => runAction(() => api.delete(`/api/teams/${t.id}`))}>Remove</button>
                     </td>
                   </tr>
