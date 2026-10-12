@@ -430,6 +430,13 @@ async function refreshSeriesPlayoffAdvancement(db: Env['DB'], tournamentId: numb
     .bind(tournamentId)
     .first<{ playoff_seeding: string }>();
   const useFixedBracket = tournament?.playoff_seeding === 'fixed_bracket';
+  const { results: stageTwoRows } = await db.prepare(
+    `SELECT id, match_number, team1_id, team2_id, winner_id, score_json
+     FROM matches WHERE tournament_id = ? AND stage = 2 AND bracket_type = ?
+     ORDER BY round, match_number`
+  )
+    .bind(tournamentId, tier)
+    .all<SeriesPlayoffQualifierMatch>();
   const { results: qualifiers } = await db.prepare(
     `SELECT id, match_number, team1_id, team2_id, winner_id, score_json
      FROM matches
@@ -446,17 +453,29 @@ async function refreshSeriesPlayoffAdvancement(db: Env['DB'], tournamentId: numb
     .bind(tournamentId, tier)
     .all<{ id: number; match_number: number }>();
 
-  if (stage3Matches.length === 1 && qualifiers.length === 2) {
-    const [semi1, semi2] = qualifiers;
+  if (stageTwoRows.length === 2) {
+    let finalMatch = stage3Matches.find((match) => match.match_number === 1);
+    if (!finalMatch) {
+      const inserted = await db.prepare(
+        `INSERT INTO matches (tournament_id, stage, bracket_type, round, match_number, team1_id, team2_id)
+         VALUES (?, 3, ?, 1, 1, ?, ?) RETURNING id`
+      )
+        .bind(tournamentId, tier, stageTwoRows[0].winner_id, stageTwoRows[1].winner_id)
+        .first<{ id: number }>();
+      if (!inserted) return;
+      finalMatch = { id: inserted.id, match_number: 1 };
+      await autoScheduleMatches(db, tournamentId, undefined, undefined, 3);
+    }
+
     await db.batch([
       db.prepare('UPDATE matches SET team1_id = ?, team2_id = ? WHERE id = ?')
-        .bind(semi1.winner_id, semi2.winner_id, stage3Matches[0].id),
+        .bind(stageTwoRows[0].winner_id, stageTwoRows[1].winner_id, finalMatch.id),
       db.prepare('UPDATE matches SET next_match_id = NULL, next_match_slot = NULL WHERE tournament_id = ? AND stage = 2 AND bracket_type = ?')
         .bind(tournamentId, tier),
       db.prepare('UPDATE matches SET next_match_id = ?, next_match_slot = 1 WHERE id = ?')
-        .bind(stage3Matches[0].id, semi1.id),
+        .bind(finalMatch.id, stageTwoRows[0].id),
       db.prepare('UPDATE matches SET next_match_id = ?, next_match_slot = 2 WHERE id = ?')
-        .bind(stage3Matches[0].id, semi2.id),
+        .bind(finalMatch.id, stageTwoRows[1].id),
     ]);
     return;
   }
@@ -645,6 +664,40 @@ async function refreshGeneratedSeriesPlayoff(db: Env['DB'], seriesId: number) {
     }
   }
 
+  if (statements.length > 0) await db.batch(statements);
+}
+
+async function refreshDirectFinalFromSemifinals(db: Env['DB'], tournamentId: number) {
+  const finalMatch = await db.prepare(
+    `SELECT id, team1_id, team2_id FROM matches
+     WHERE tournament_id = ? AND stage = 3 AND bracket_type = 'main' AND status = 'scheduled'
+     ORDER BY match_number LIMIT 1`
+  )
+    .bind(tournamentId)
+    .first<{ id: number; team1_id: number | null; team2_id: number | null }>();
+  if (!finalMatch) return;
+
+  const { results: semifinalRows } = await db.prepare(
+    `SELECT id, round, match_number, winner_id FROM matches
+     WHERE tournament_id = ? AND stage = 2
+     ORDER BY round, match_number`
+  )
+    .bind(tournamentId)
+    .all<{ id: number; round: number; match_number: number; winner_id: number | null }>();
+  if (semifinalRows.length !== 2) return;
+
+  const statements = semifinalRows.flatMap((match, index) => {
+    const slot = index + 1;
+    const updates = [
+      db.prepare('UPDATE matches SET next_match_id = ?, next_match_slot = ? WHERE id = ?')
+        .bind(finalMatch.id, slot, match.id),
+    ];
+    if (match.winner_id !== null) {
+      const column = slot === 1 ? 'team1_id' : 'team2_id';
+      updates.push(db.prepare(`UPDATE matches SET ${column} = ? WHERE id = ?`).bind(match.winner_id, finalMatch.id));
+    }
+    return updates;
+  });
   if (statements.length > 0) await db.batch(statements);
 }
 
@@ -1004,12 +1057,35 @@ matchRoutes.post('/tournaments/:tournamentId/round3/generate-knockout', requireA
     if (ranking.length < 2) return c.json({ error: 'At least 2 ranked teams are required to generate a final' }, 400);
 
     await c.env.DB.prepare('DELETE FROM matches WHERE tournament_id = ? AND stage = 3').bind(tournamentId).run();
-    await c.env.DB.prepare(
+    const finalMatch = await c.env.DB.prepare(
       `INSERT INTO matches (tournament_id, stage, bracket_type, round, match_number, team1_id, team2_id)
-       VALUES (?, 3, 'main', 1, 1, ?, ?)`
+       VALUES (?, 3, 'main', 1, 1, ?, ?) RETURNING id`
     )
       .bind(tournamentId, ranking[0].teamId, ranking[1].teamId)
-      .run();
+      .first<{ id: number }>();
+    if (!finalMatch) return c.json({ error: 'Could not create the final match' }, 500);
+
+    const { results: semifinals } = await c.env.DB.prepare(
+      `SELECT id, round, match_number, winner_id FROM matches
+       WHERE tournament_id = ? AND stage = 2
+       ORDER BY round, match_number`
+    )
+      .bind(tournamentId)
+      .all<{ id: number; round: number; match_number: number; winner_id: number | null }>();
+    if (semifinals.length === 2) {
+      for (const [index, semifinal] of semifinals.entries()) {
+        const slot = index + 1;
+        if (semifinal.winner_id !== null) {
+          const column = slot === 1 ? 'team1_id' : 'team2_id';
+          await c.env.DB.prepare(`UPDATE matches SET ${column} = ? WHERE id = ?`)
+            .bind(semifinal.winner_id, finalMatch.id)
+            .run();
+        }
+        await c.env.DB.prepare('UPDATE matches SET next_match_id = ?, next_match_slot = ? WHERE id = ?')
+          .bind(finalMatch.id, slot, semifinal.id)
+          .run();
+      }
+    }
     await autoScheduleMatches(c.env.DB, tournamentId, body.startTime, body.endTime, 3);
 
     const { results } = await c.env.DB.prepare(
@@ -1385,6 +1461,9 @@ matchRoutes.patch('/matches/:id/score', requireAdmin, requireTournamentManager((
 
   if (isSeriesPlayoffQualifier) {
     await refreshSeriesPlayoffAdvancement(c.env.DB, match.tournament_id, match.bracket_type);
+  }
+  if (match.stage === 2 && !isSeriesPlayoffQualifier) {
+    await refreshDirectFinalFromSemifinals(c.env.DB, match.tournament_id);
   }
   if (qualifierSeriesId !== null) {
     await refreshGeneratedSeriesPlayoff(c.env.DB, qualifierSeriesId);

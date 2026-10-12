@@ -183,6 +183,31 @@ function exportSchedule(tournamentName: string, matches: Match[], courts: Court[
   XLSX.writeFile(workbook, `${safeName}-schedule.xlsx`);
 }
 
+function exportTeams(tournamentName: string, teams: Team[]) {
+  const rows = [...teams]
+    .sort((a, b) => (a.seed ?? Number.MAX_SAFE_INTEGER) - (b.seed ?? Number.MAX_SAFE_INTEGER) || a.name.localeCompare(b.name))
+    .map((team) => ({
+      'Team ID': team.id,
+      'Team': team.name,
+      'Player 1': team.player1_name,
+      'Player 2': team.player2_name ?? '',
+      'Seed': team.seed ?? '',
+      'Pool': team.pool ?? '',
+      'Tier': team.tier ?? '',
+      'Status': team.withdrawn ? 'Withdrawn' : 'Active',
+    }));
+
+  const worksheet = XLSX.utils.json_to_sheet(rows);
+  worksheet['!cols'] = [
+    { wch: 10 }, { wch: 28 }, { wch: 28 }, { wch: 28 },
+    { wch: 10 }, { wch: 12 }, { wch: 16 }, { wch: 14 },
+  ];
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Teams');
+  const safeName = tournamentName.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'tournament';
+  XLSX.writeFile(workbook, `${safeName}-teams.xlsx`);
+}
+
 interface ImportResult {
   updated: number;
   skipped: number;
@@ -711,14 +736,19 @@ export function AdminTournamentManage() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', marginBottom: '12px' }}>
           <h2 style={{ margin: 0 }}>Teams ({teams.length})</h2>
           {teamsTab === 'list' && teams.length > 0 && (
-            <button
-              type="button"
-              className="button--danger"
-              style={{ margin: 0 }}
-              onClick={deleteAllTeams}
-            >
-              Delete All Teams
-            </button>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              <button type="button" className="button--outline" style={{ margin: 0 }} onClick={() => exportTeams(tournament.name, teams)}>
+                Export Teams
+              </button>
+              <button
+                type="button"
+                className="button--danger"
+                style={{ margin: 0 }}
+                onClick={deleteAllTeams}
+              >
+                Delete All Teams
+              </button>
+            </div>
           )}
         </div>
         <nav className="tab-nav">

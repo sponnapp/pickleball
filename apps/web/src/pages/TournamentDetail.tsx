@@ -197,7 +197,13 @@ function PlayoffReseedPreview({ matches, semifinalMode = 'score_reseed' }: {
   };
 
   if (openingMatches.length === 2) {
-    const final = projectedMatch(-4, 3, 1, 'Final', 'Winner Semifinal 1', 'Winner Semifinal 2', true);
+    const semifinalOneWinner = openingMatches[0].status === 'completed' && openingMatches[0].winnerName
+      ? openingMatches[0].winnerName
+      : 'Winner Semifinal 1';
+    const semifinalTwoWinner = openingMatches[1].status === 'completed' && openingMatches[1].winnerName
+      ? openingMatches[1].winnerName
+      : 'Winner Semifinal 2';
+    const final = projectedMatch(-4, 3, 1, 'Final', semifinalOneWinner, semifinalTwoWinner, true);
     final.feeders = openingMatches.map((match) => ({ match, feeders: [null, null] }));
     return (
       <div className="playoff-tree" aria-label="Semifinals advancing to final">
