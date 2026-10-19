@@ -110,6 +110,11 @@ function PlayoffTreeMatch({ node }: { node: PlayoffTreeNode }) {
   const feeders = node.feeders.filter((feeder): feeder is PlayoffTreeNode => feeder !== null);
   const statusLabel = match.status === 'completed' ? 'Final' : match.status === 'in_progress' ? 'Live' : 'Scheduled';
   const statusClass = match.status === 'completed' ? 'completed' : match.status === 'in_progress' ? 'live' : 'scheduled';
+  const displayTeam = (teamName: string | null, slot: number) => {
+    if (teamName) return teamName;
+    const feeder = node.feeders[slot]?.match;
+    return match.isFinal && feeder ? feeder.winnerName || `Winner ${feeder.roundLabel}` : 'TBD';
+  };
 
   return (
     <div className={`playoff-tree__node${feeders.length > 0 ? ' has-feeders' : ''}`}>
@@ -124,10 +129,10 @@ function PlayoffTreeMatch({ node }: { node: PlayoffTreeNode }) {
           <span className={`playoff-tree-match__status is-${statusClass}`}>{statusLabel}</span>
         </div>
         <div className={`playoff-tree-match__team${match.winnerName && match.winnerName === match.team1Name ? ' is-winner' : ''}`}>
-          <span>{match.team1Name || 'TBD'}</span>
+          <span>{displayTeam(match.team1Name, 0)}</span>
         </div>
         <div className={`playoff-tree-match__team${match.winnerName && match.winnerName === match.team2Name ? ' is-winner' : ''}`}>
-          <span>{match.team2Name || 'TBD'}</span>
+          <span>{displayTeam(match.team2Name, 1)}</span>
         </div>
         {match.score && <div className="playoff-tree-match__score">{match.score}</div>}
       </article>

@@ -1874,6 +1874,16 @@ button.button--danger:hover,
   margin: 0 auto;
 }
 
+.home-winners {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.home-winners .tournament-winner-banner {
+  margin: 0;
+}
+
 .home-hero {
   position: relative;
   overflow: hidden;
@@ -2230,6 +2240,52 @@ button.button--danger:hover,
   grid-template-columns: minmax(280px, 1.1fr) minmax(320px, 1fr);
   gap: 24px;
   align-items: start;
+}
+
+.admin-champion-selection {
+  display: grid;
+  gap: 12px;
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid rgba(23, 53, 44, 0.14);
+}
+
+.admin-champion-selection h3,
+.admin-champion-selection p {
+  margin-bottom: 4px;
+}
+
+.admin-champion-selection__options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+  gap: 4px 18px;
+}
+
+.admin-champion-selection__option {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(23, 53, 44, 0.1);
+}
+
+.admin-champion-selection__option input {
+  flex: 0 0 auto;
+  margin-top: 4px;
+}
+
+.admin-champion-selection__option span {
+  display: grid;
+  min-width: 0;
+}
+
+.admin-champion-selection__option strong {
+  overflow-wrap: anywhere;
+}
+
+.admin-champion-selection__option small {
+  color: #6d7c74;
+  text-transform: capitalize;
 }
 
 .admin-home-content__upload,

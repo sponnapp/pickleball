@@ -29,7 +29,7 @@ export async function requireAdmin(c: Ctx, next: Next) {
   return next();
 }
 
-// Stricter than requireAdmin: user management is restricted to the 'admin' role, not organizers.
+// Admin-only operations are restricted to the 'admin' role, not organizers or superusers.
 export async function requireSuperAdmin(c: Ctx, next: Next) {
   const user = c.get('user');
   if (!user || user.role !== 'admin') {
@@ -38,20 +38,31 @@ export async function requireSuperAdmin(c: Ctx, next: Next) {
   return next();
 }
 
-// Admins/organizers manage every tournament; superusers are scoped to tournaments they're
-// explicitly assigned to via tournament_managers. Must run after requireAdmin.
-export function requireTournamentManager(resolveTournamentId: (c: Ctx) => Promise<string | number | null | undefined>) {
+// Admins manage every tournament. Organizers and superusers must be assigned to the tournament.
+// Superusers may only submit match scores. Must run after requireAdmin.
+export function requireTournamentManager(
+  resolveTournamentId: (c: Ctx) => Promise<string | number | null | undefined>,
+  options: { allowSuperuserScore?: boolean } = {}
+) {
   return async (c: Ctx, next: Next) => {
     const user = c.get('user')!;
-    if (user.role === 'admin' || user.role === 'organizer') return next();
+    if (user.role === 'admin') return next();
+    if (user.role === 'superuser' && !options.allowSuperuserScore) {
+      return c.json({ error: 'Superusers may only update match scores' }, 403);
+    }
 
     const tournamentId = await resolveTournamentId(c);
     if (!tournamentId) return c.json({ error: 'Not found' }, 404);
 
-    const access = await c.env.DB.prepare(
-      'SELECT 1 FROM tournament_managers WHERE user_id = ? AND tournament_id = ?'
-    )
-      .bind(user.id, tournamentId)
+    const tournament = await c.env.DB.prepare('SELECT series_id FROM tournaments WHERE id = ?')
+      .bind(tournamentId)
+      .first<{ series_id: number | null }>();
+    if (!tournament) return c.json({ error: 'Not found' }, 404);
+    const access = await c.env.DB.prepare(user.role === 'organizer'
+      ? `SELECT 1 FROM tournament_managers
+         WHERE user_id = ? AND (tournament_id = ? OR series_id = ?)`
+      : 'SELECT 1 FROM tournament_managers WHERE user_id = ? AND tournament_id = ?')
+      .bind(...(user.role === 'organizer' ? [user.id, tournamentId, tournament.series_id] : [user.id, tournamentId]))
       .first();
     if (!access) return c.json({ error: 'You are not assigned to this tournament' }, 403);
     return next();

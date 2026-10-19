@@ -66,6 +66,11 @@ userRoutes.patch('/:id', requireSuperAdmin, async (c) => {
     .bind(...values)
     .first();
   if (!user) return c.json({ error: 'User not found' }, 404);
+  if (body.role !== undefined && body.role !== 'organizer') {
+    await c.env.DB.prepare('DELETE FROM tournament_managers WHERE user_id = ? AND series_id IS NOT NULL')
+      .bind(id)
+      .run();
+  }
   return c.json({ user });
 });
 
@@ -105,27 +110,66 @@ userRoutes.delete('/:id', requireSuperAdmin, async (c) => {
   return c.json({ ok: true });
 });
 
-// Tournaments ("seasons") a superuser is allowed to manage.
+// Tournament and series assignments available to organizer/superuser accounts.
 userRoutes.get('/:id/tournaments', requireSuperAdmin, async (c) => {
-  const { results } = await c.env.DB.prepare('SELECT tournament_id FROM tournament_managers WHERE user_id = ?')
-    .bind(c.req.param('id'))
-    .all<{ tournament_id: number }>();
-  return c.json({ tournamentIds: results.map((r) => r.tournament_id) });
+  const userId = Number(c.req.param('id'));
+  if (!Number.isInteger(userId) || userId < 1) return c.json({ error: 'Invalid user id' }, 400);
+  const user = await c.env.DB.prepare('SELECT role FROM users WHERE id = ?').bind(userId).first<{ role: string }>();
+  if (!user) return c.json({ error: 'User not found' }, 404);
+  const { results } = await c.env.DB.prepare(
+    'SELECT tournament_id, series_id FROM tournament_managers WHERE user_id = ?'
+  )
+    .bind(userId)
+    .all<{ tournament_id: number | null; series_id: number | null }>();
+  return c.json({
+    tournamentIds: results.flatMap((row) => row.tournament_id === null ? [] : [row.tournament_id]),
+    seriesIds: user.role === 'organizer'
+      ? results.flatMap((row) => row.series_id === null ? [] : [row.series_id])
+      : [],
+  });
 });
 
 userRoutes.patch('/:id/tournaments', requireSuperAdmin, async (c) => {
   const userId = Number(c.req.param('id'));
-  const { tournament_ids } = await c.req.json<{ tournament_ids?: unknown }>();
-  if (!Array.isArray(tournament_ids) || tournament_ids.some((t) => typeof t !== 'number' && isNaN(Number(t)))) {
-    return c.json({ error: 'tournament_ids must be an array of tournament ids' }, 400);
+  if (!Number.isInteger(userId) || userId < 1) return c.json({ error: 'Invalid user id' }, 400);
+  const body = await c.req.json<{ tournament_ids?: unknown; series_ids?: unknown }>();
+  if (!Array.isArray(body.tournament_ids) || body.tournament_ids.some((id) => !Number.isInteger(Number(id)) || Number(id) < 1)) {
+    return c.json({ error: 'tournament_ids must be an array of positive tournament ids' }, 400);
+  }
+  if (body.series_ids !== undefined && (!Array.isArray(body.series_ids) || body.series_ids.some((id) => !Number.isInteger(Number(id)) || Number(id) < 1))) {
+    return c.json({ error: 'series_ids must be an array of positive series ids' }, 400);
   }
 
-  const ids = tournament_ids.map(Number);
-  await c.env.DB.prepare('DELETE FROM tournament_managers WHERE user_id = ?').bind(userId).run();
-  for (const tournamentId of ids) {
-    await c.env.DB.prepare('INSERT INTO tournament_managers (user_id, tournament_id) VALUES (?, ?)')
-      .bind(userId, tournamentId)
-      .run();
+  const target = await c.env.DB.prepare('SELECT role FROM users WHERE id = ?').bind(userId).first<{ role: string }>();
+  if (!target) return c.json({ error: 'User not found' }, 404);
+  const tournamentIds = [...new Set((body.tournament_ids as unknown[]).map(Number))];
+  const seriesIds = [...new Set(((body.series_ids ?? []) as unknown[]).map(Number))];
+  if (seriesIds.length > 0 && target.role !== 'organizer') {
+    return c.json({ error: 'Series assignments are only available for organizers' }, 400);
   }
-  return c.json({ tournamentIds: ids });
+
+  if (tournamentIds.length > 0) {
+    const placeholders = tournamentIds.map(() => '?').join(', ');
+    const { results } = await c.env.DB.prepare(`SELECT id FROM tournaments WHERE id IN (${placeholders})`)
+      .bind(...tournamentIds)
+      .all<{ id: number }>();
+    if (results.length !== tournamentIds.length) return c.json({ error: 'One or more tournaments do not exist' }, 400);
+  }
+  if (seriesIds.length > 0) {
+    const placeholders = seriesIds.map(() => '?').join(', ');
+    const { results } = await c.env.DB.prepare(`SELECT id FROM competition_series WHERE id IN (${placeholders})`)
+      .bind(...seriesIds)
+      .all<{ id: number }>();
+    if (results.length !== seriesIds.length) return c.json({ error: 'One or more tournament series do not exist' }, 400);
+  }
+
+  const statements = [c.env.DB.prepare('DELETE FROM tournament_managers WHERE user_id = ?').bind(userId)];
+  statements.push(...tournamentIds.map((tournamentId) => c.env.DB.prepare(
+    'INSERT INTO tournament_managers (user_id, tournament_id) VALUES (?, ?)'
+  ).bind(userId, tournamentId)));
+  statements.push(...seriesIds.map((seriesId) => c.env.DB.prepare(
+    'INSERT INTO tournament_managers (user_id, series_id) VALUES (?, ?)'
+  ).bind(userId, seriesId)));
+  await c.env.DB.batch(statements);
+  return c.json({ tournamentIds, seriesIds });
 });

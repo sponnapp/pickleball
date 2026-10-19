@@ -1,6 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, API_URL } from '../api';
+import {
+  getTournamentWinners,
+  type TournamentWinner,
+  type WinnerMatch,
+  type WinnerStanding,
+  type WinnerTierResult,
+} from '../tournamentWinners';
 
 interface Tournament {
   id: number;
@@ -9,6 +16,7 @@ interface Tournament {
   status: string;
   start_date: string | null;
   end_date: string | null;
+  series_stage?: string | null;
 }
 
 interface Sponsor {
@@ -16,6 +24,11 @@ interface Sponsor {
   name: string;
   logo_url: string | null;
   website_url: string | null;
+}
+
+interface HomeChampion {
+  tournament: Tournament;
+  winners: TournamentWinner[];
 }
 
 function formatDate(value: string | null) {
@@ -26,11 +39,15 @@ function formatDate(value: string | null) {
 
 export function Home() {
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
+  const [selectedTournamentIds, setSelectedTournamentIds] = useState<number[]>([]);
+  const [champions, setChampions] = useState<HomeChampion[]>([]);
   const [heroPath, setHeroPath] = useState('/Tournament.jpeg');
   const [sponsors, setSponsors] = useState<Sponsor[]>([]);
 
   useEffect(() => {
-    api.get<{ tournaments: Tournament[] }>('/api/tournaments').then((result) => setTournaments(result.tournaments.slice(0, 3)));
+    api.get<{ tournaments: Tournament[] }>('/api/tournaments').then((result) => setTournaments(result.tournaments));
+    api.get<{ selectedTournamentIds: number[] }>('/api/home-content/champions')
+      .then((result) => setSelectedTournamentIds(result.selectedTournamentIds));
     api.get<{ sponsors: Sponsor[] }>('/api/home-content')
       .then((result) => {
         setSponsors(result.sponsors);
@@ -41,8 +58,64 @@ export function Home() {
     });
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    const selectedIds = new Set(selectedTournamentIds);
+    const candidates = tournaments.filter((tournament) => selectedIds.has(tournament.id));
+
+    Promise.all(candidates.map(async (tournament) => {
+      try {
+        const [matchesResult, standingsResult, tierResultsResult] = await Promise.all([
+          api.get<{ matches: WinnerMatch[] }>(`/api/tournaments/${tournament.id}/matches`),
+          api.get<{ standings: WinnerStanding[] }>(`/api/tournaments/${tournament.id}/standings`),
+          api.get<{ tierResults: WinnerTierResult[] }>(`/api/tournaments/${tournament.id}/tier-results`),
+        ]);
+        const winners = getTournamentWinners(tournament, tierResultsResult.tierResults, matchesResult.matches, standingsResult.standings);
+        return winners.length > 0 ? { tournament, winners } : null;
+      } catch {
+        return null;
+      }
+    })).then((results) => {
+      if (!cancelled) setChampions(results.filter((result): result is HomeChampion => result !== null));
+    });
+
+    return () => { cancelled = true; };
+  }, [tournaments, selectedTournamentIds]);
+
+  const upcomingTournaments = tournaments.slice(0, 3);
+
   return (
     <div className="home-page">
+      {champions.length > 0 && (
+        <section className="home-winners" aria-label="Tournament champions">
+          {champions.map(({ tournament, winners }) => (
+            <section className="tournament-winner-banner" key={tournament.id} aria-label={`${tournament.name} champions`}>
+              <div className="tournament-winner-banner__header">
+                <span className="tournament-winner-banner__icon" aria-hidden="true">🏆</span>
+                <div>
+                  <h3>Tournament Champions</h3>
+                  <p>{tournament.name} · Final podium and champions</p>
+                </div>
+              </div>
+              <div className="tournament-winner-banner__grid">
+                {winners.map((winner, index) => (
+                  <div key={`${winner.tier ?? 'main'}-${index}`} className="winner-card">
+                    {winner.tier && ['platinum', 'gold', 'silver', 'bronze'].includes(winner.tier) && (
+                      <span className={`tier-badge tier-badge--${winner.tier}`} style={{ alignSelf: 'flex-start' }}>
+                        {winner.tier}
+                      </span>
+                    )}
+                    <div className="winner-card__label">{winner.label}</div>
+                    <div className="winner-card__name">🥇 {winner.winner}</div>
+                    {winner.runnerUp && <div className="winner-card__runner">🥈 {winner.runnerUp}</div>}
+                  </div>
+                ))}
+              </div>
+            </section>
+          ))}
+        </section>
+      )}
+
       <section className="home-hero">
         <img
           className="home-hero__image"
@@ -67,9 +140,9 @@ export function Home() {
             <span aria-hidden="true">-&gt;</span>
           </Link>
         </div>
-        {tournaments.length > 0 ? (
+        {upcomingTournaments.length > 0 ? (
           <div className="event-grid">
-            {tournaments.map((tournament) => (
+            {upcomingTournaments.map((tournament) => (
               <Link to={`/tournaments/${tournament.id}`} className="event-card" key={tournament.id}>
                 <div className="event-card__date">{formatDate(tournament.start_date)}</div>
                 <div className="event-card__body">

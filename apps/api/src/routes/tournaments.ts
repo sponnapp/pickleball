@@ -7,9 +7,9 @@ export const tournamentRoutes = new Hono<{ Bindings: Env; Variables: Variables }
 
 tournamentRoutes.get('/', async (c) => {
   const user = c.get('user');
-  const isAdminOrSuperuser = user && ['admin', 'superuser', 'organizer'].includes(user.role);
+  const isGlobalAdmin = user?.role === 'admin';
 
-  const query = isAdminOrSuperuser
+  const query = isGlobalAdmin
       ? `SELECT t.id, t.name, t.description, t.format, t.status, t.start_date, t.end_date,
       t.series_id, t.series_stage, t.competition_type, s.name AS series_name
     FROM tournaments t LEFT JOIN competition_series s ON s.id = t.series_id
@@ -23,17 +23,22 @@ tournamentRoutes.get('/', async (c) => {
   return c.json({ tournaments: results });
 });
 
-// Admin-area listing: superusers only see tournaments ("seasons") they're assigned to manage.
+// Admin-area listing: non-admin managers only see tournaments assigned to them.
 tournamentRoutes.get('/admin', requireAdmin, async (c) => {
   const user = c.get('user')!;
-  if (user.role === 'superuser') {
+  if (user.role === 'superuser' || user.role === 'organizer') {
+    const assignmentCondition = user.role === 'organizer'
+      ? '(tm.tournament_id = t.id OR tm.series_id = t.series_id)'
+      : 'tm.tournament_id = t.id';
     const { results } = await c.env.DB.prepare(
-            `SELECT t.id, t.name, t.description, t.format, t.status, t.start_date, t.end_date,
+      `SELECT t.id, t.name, t.description, t.format, t.status, t.start_date, t.end_date,
                 t.series_id, t.series_stage, t.competition_type, s.name AS series_name
        FROM tournaments t
               LEFT JOIN competition_series s ON s.id = t.series_id
-       JOIN tournament_managers tm ON tm.tournament_id = t.id
-       WHERE tm.user_id = ?
+       WHERE EXISTS (
+         SELECT 1 FROM tournament_managers tm
+         WHERE tm.user_id = ? AND ${assignmentCondition}
+       )
        ORDER BY t.start_date DESC`
     )
       .bind(user.id)
@@ -50,21 +55,39 @@ tournamentRoutes.get('/admin', requireAdmin, async (c) => {
 });
 
 tournamentRoutes.get('/admin/series', requireAdmin, async (c) => {
-  const { results } = await c.env.DB.prepare(
-    `SELECT s.id, s.name, s.description, s.status,
+  const user = c.get('user')!;
+  const seriesAccess = user.role === 'admin'
+    ? ''
+    : `WHERE EXISTS (
+        SELECT 1 FROM tournament_managers tm
+        WHERE tm.user_id = ? AND tm.series_id = s.id
+      )`;
+  const query = `SELECT s.id, s.name, s.description, s.status,
             (SELECT COUNT(*) FROM tournaments t WHERE t.series_id = s.id AND t.series_stage LIKE 'qualifier_%') AS qualifier_count,
             (SELECT t.id FROM tournaments t WHERE t.series_id = s.id AND t.series_stage = 'playoffs' LIMIT 1) AS playoffs_id
      FROM competition_series s
-     ORDER BY s.created_at DESC`
-  ).all();
+     ${seriesAccess}
+     ORDER BY s.created_at DESC`;
+  const statement = c.env.DB.prepare(query);
+  const { results } = user.role === 'admin'
+    ? await statement.all()
+    : await statement.bind(user.id).all();
   return c.json({ series: results });
 });
 
 tournamentRoutes.post('/admin/series/:seriesId/playoffs', requireAdmin, async (c) => {
   const user = c.get('user')!;
-  if (user.role === 'superuser') return c.json({ error: 'Superusers cannot create tournaments' }, 403);
+  if (user.role === 'superuser') return c.json({ error: 'Superusers cannot create playoffs' }, 403);
 
   const seriesId = c.req.param('seriesId');
+  if (user.role === 'organizer') {
+    const assignment = await c.env.DB.prepare(
+      'SELECT 1 FROM tournament_managers WHERE user_id = ? AND series_id = ?'
+    )
+      .bind(user.id, seriesId)
+      .first();
+    if (!assignment) return c.json({ error: 'You are not assigned to this tournament series' }, 403);
+  }
   const series = await c.env.DB.prepare('SELECT id, name FROM competition_series WHERE id = ?')
     .bind(seriesId)
     .first<{ id: number; name: string }>();
@@ -202,17 +225,22 @@ tournamentRoutes.get('/:id', async (c) => {
   if (!tournament) return c.json({ error: 'Tournament not found' }, 404);
 
   const user = c.get('user');
-  const isAdminOrSuperuser = user && ['admin', 'superuser', 'organizer'].includes(user.role);
-  if (tournament.status === 'draft' && !isAdminOrSuperuser) {
-    return c.json({ error: 'Tournament not found' }, 404);
+  if (tournament.status === 'draft' && user?.role !== 'admin') {
+    if (!user || !['organizer', 'superuser'].includes(user.role)) return c.json({ error: 'Tournament not found' }, 404);
+    const assignment = await c.env.DB.prepare(user.role === 'organizer'
+      ? `SELECT 1 FROM tournament_managers
+         WHERE user_id = ? AND (tournament_id = ? OR series_id = (SELECT series_id FROM tournaments WHERE id = ?))`
+      : 'SELECT 1 FROM tournament_managers WHERE user_id = ? AND tournament_id = ?')
+      .bind(...(user.role === 'organizer' ? [user.id, id, id] : [user.id, id]))
+      .first();
+    if (!assignment) return c.json({ error: 'Tournament not found' }, 404);
   }
 
   return c.json({ tournament });
 });
 
-tournamentRoutes.post('/', requireAdmin, async (c) => {
+tournamentRoutes.post('/', requireSuperAdmin, async (c) => {
   const user = c.get('user')!;
-  if (user.role === 'superuser') return c.json({ error: 'Superusers cannot create tournaments' }, 403);
   const body = await c.req.json<{
     name: string;
     description?: string;

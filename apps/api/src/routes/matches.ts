@@ -1359,7 +1359,10 @@ matchRoutes.patch('/matches/:id', requireAdmin, requireTournamentManager((c) => 
 
 // Records a completed match score and auto-advances the winner to the next match, if any.
 // Date/time and valid score are strictly mandatory before declaring a winner.
-matchRoutes.patch('/matches/:id/score', requireAdmin, requireTournamentManager((c) => resolveMatchTournamentId(c.env.DB, c.req.param('id'))), async (c) => {
+matchRoutes.patch('/matches/:id/score', requireAdmin, requireTournamentManager(
+  (c) => resolveMatchTournamentId(c.env.DB, c.req.param('id')),
+  { allowSuperuserScore: true }
+), async (c) => {
   const id = c.req.param('id');
   const body = await c.req.json<{
     games: { team1: number; team2: number }[];
@@ -1419,7 +1422,9 @@ matchRoutes.patch('/matches/:id/score', requireAdmin, requireTournamentManager((
     }
   }
 
-  const scheduledTime = body.scheduled_time ?? match.scheduled_time;
+  const scheduledTime = c.get('user')!.role === 'superuser'
+    ? match.scheduled_time
+    : body.scheduled_time ?? match.scheduled_time;
   if (!scheduledTime || !scheduledTime.trim()) {
     return c.json({ error: 'Date & time is mandatory before declaring winner' }, 400);
   }

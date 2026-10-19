@@ -15,12 +15,18 @@ interface Tournament {
   name: string;
 }
 
+interface TournamentSeries {
+  id: number;
+  name: string;
+}
+
 const ROLES: ManagedUser['role'][] = ['admin', 'organizer', 'superuser', 'player'];
 
 export function AdminUsers() {
   const { user: currentUser } = useAuth();
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
+  const [series, setSeries] = useState<TournamentSeries[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<number | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -34,7 +40,8 @@ export function AdminUsers() {
   const load = () => api.get<{ users: ManagedUser[] }>('/api/users').then((r) => setUsers(r.users));
   useEffect(() => {
     load();
-    api.get<{ tournaments: Tournament[] }>('/api/tournaments').then((r) => setTournaments(r.tournaments));
+    api.get<{ tournaments: Tournament[] }>('/api/tournaments/admin').then((r) => setTournaments(r.tournaments));
+    api.get<{ series: TournamentSeries[] }>('/api/tournaments/admin/series').then((r) => setSeries(r.series));
   }, []);
 
   const changeRole = async (u: ManagedUser, role: ManagedUser['role']) => {
@@ -226,10 +233,10 @@ export function AdminUsers() {
                     </td>
                   </tr>
                 )}
-                {u.role === 'superuser' && (
+                {(u.role === 'superuser' || u.role === 'organizer') && (
                   <tr>
                     <td colSpan={4}>
-                      <SuperuserTournamentPicker userId={u.id} tournaments={tournaments} />
+                      <SeasonAssignmentPicker user={u} tournaments={tournaments} series={series} />
                     </td>
                   </tr>
                 )}
@@ -242,17 +249,25 @@ export function AdminUsers() {
   );
 }
 
-function SuperuserTournamentPicker({ userId, tournaments }: { userId: number; tournaments: Tournament[] }) {
+function SeasonAssignmentPicker({ user, tournaments, series }: {
+  user: ManagedUser;
+  tournaments: Tournament[];
+  series: TournamentSeries[];
+}) {
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [selectedSeries, setSelectedSeries] = useState<Set<number>>(new Set());
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     api
-      .get<{ tournamentIds: number[] }>(`/api/users/${userId}/tournaments`)
-      .then((r) => setSelected(new Set(r.tournamentIds)));
-  }, [userId]);
+      .get<{ tournamentIds: number[]; seriesIds: number[] }>(`/api/users/${user.id}/tournaments`)
+      .then((r) => {
+        setSelected(new Set(r.tournamentIds));
+        setSelectedSeries(new Set(r.seriesIds));
+      });
+  }, [user.id]);
 
   const toggle = (id: number) => {
     setSaved(false);
@@ -264,11 +279,24 @@ function SuperuserTournamentPicker({ userId, tournaments }: { userId: number; to
     });
   };
 
+  const toggleSeries = (id: number) => {
+    setSaved(false);
+    setSelectedSeries((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
   const save = async () => {
     setSaving(true);
     setError(null);
     try {
-      await api.patch(`/api/users/${userId}/tournaments`, { tournament_ids: Array.from(selected) });
+      await api.patch(`/api/users/${user.id}/tournaments`, {
+        tournament_ids: Array.from(selected),
+        series_ids: user.role === 'organizer' ? Array.from(selectedSeries) : [],
+      });
       setSaved(true);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to save assigned seasons');
@@ -279,7 +307,7 @@ function SuperuserTournamentPicker({ userId, tournaments }: { userId: number; to
 
   return (
     <div className="superuser-seasons">
-      <span className="superuser-seasons__label">Assigned seasons:</span>
+      <span className="superuser-seasons__label">Assigned tournaments:</span>
       <div className="superuser-seasons__list">
         {tournaments.length === 0 && <span style={{ opacity: 0.7 }}>No tournaments yet</span>}
         {tournaments.map((t) => (
@@ -289,8 +317,20 @@ function SuperuserTournamentPicker({ userId, tournaments }: { userId: number; to
           </label>
         ))}
       </div>
+      {user.role === 'organizer' && <>
+        <span className="superuser-seasons__label">Assigned series:</span>
+        <div className="superuser-seasons__list">
+          {series.length === 0 && <span style={{ opacity: 0.7 }}>No tournament series yet</span>}
+          {series.map((item) => (
+            <label key={item.id} className="superuser-seasons__item">
+              <input type="checkbox" checked={selectedSeries.has(item.id)} onChange={() => toggleSeries(item.id)} />
+              {item.name}
+            </label>
+          ))}
+        </div>
+      </>}
       <button type="button" className="button-sm" onClick={save} disabled={saving}>
-        {saving ? 'Saving...' : saved ? 'Saved' : 'Save seasons'}
+        {saving ? 'Saving...' : saved ? 'Saved' : 'Save assignments'}
       </button>
       {error && <span className="error" style={{ fontSize: '0.8rem', marginLeft: '0.5rem' }}>{error}</span>}
     </div>

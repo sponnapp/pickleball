@@ -41,6 +41,8 @@ export function AdminDashboard() {
   const [heroFile, setHeroFile] = useState<File | null>(null);
   const [heroPreviewUrl, setHeroPreviewUrl] = useState<string | null>(null);
   const [sponsors, setSponsors] = useState<Sponsor[]>([]);
+  const [selectedChampionTournamentIds, setSelectedChampionTournamentIds] = useState<number[]>([]);
+  const [savingChampionSelections, setSavingChampionSelections] = useState(false);
   const [sponsorName, setSponsorName] = useState('');
   const [sponsorLogoUrl, setSponsorLogoUrl] = useState('');
   const [sponsorLogoFile, setSponsorLogoFile] = useState<File | null>(null);
@@ -80,10 +82,16 @@ export function AdminDashboard() {
 
   const load = () => {
     api.get<{ tournaments: Tournament[] }>('/api/tournaments/admin').then((r) => setTournaments(r.tournaments));
-    api.get<{ series: CompetitionSeries[] }>('/api/tournaments/admin/series').then((r) => setSeriesList(r.series));
-    api.get<{ sponsors: Sponsor[] }>('/api/home-content').then((r) => {
-      setSponsors(r.sponsors);
-    });
+    if (user?.role === 'admin' || user?.role === 'organizer') {
+      api.get<{ series: CompetitionSeries[] }>('/api/tournaments/admin/series').then((r) => setSeriesList(r.series));
+    }
+    if (user?.role === 'admin') {
+      api.get<{ selectedTournamentIds: number[] }>('/api/home-content/champions')
+        .then((r) => setSelectedChampionTournamentIds(r.selectedTournamentIds));
+      api.get<{ sponsors: Sponsor[] }>('/api/home-content').then((r) => {
+        setSponsors(r.sponsors);
+      });
+    }
   };
   useEffect(() => {
     load();
@@ -91,6 +99,7 @@ export function AdminDashboard() {
 
   useEffect(() => {
     if (user?.role === 'superuser') setActiveTab('tournaments');
+    if (user?.role === 'organizer') setActiveTab('series');
   }, [user?.role]);
 
   const createTournament = async (e: React.FormEvent) => {
@@ -207,6 +216,21 @@ export function AdminDashboard() {
     }
   };
 
+  const saveChampionSelections = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setSavingChampionSelections(true);
+    setContentNotice(null);
+    try {
+      await api.patch('/api/admin/home-content/champions', { tournamentIds: selectedChampionTournamentIds });
+      setContentNotice({ type: 'success', message: 'Home page champion selections saved.' });
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : 'Failed to save home page champion selections';
+      setContentNotice({ type: 'error', message });
+    } finally {
+      setSavingChampionSelections(false);
+    }
+  };
+
   const sortedTournaments = [...tournaments].sort((a, b) => {
     const aIsSeries = a.series_id != null;
     const bIsSeries = b.series_id != null;
@@ -237,12 +261,12 @@ export function AdminDashboard() {
             Home content
           </button>
         )}
-        {user?.role !== 'superuser' && (
+        {user?.role === 'admin' && (
           <button className={`tab-nav-link${activeTab === 'create' ? ' active' : ''}`} onClick={() => setActiveTab('create')}>
             Create tournament
           </button>
         )}
-        {user?.role !== 'superuser' && (
+        {(user?.role === 'admin' || user?.role === 'organizer') && (
           <button className={`tab-nav-link${activeTab === 'series' ? ' active' : ''}`} onClick={() => setActiveTab('series')}>
             Tournament series
           </button>
@@ -310,6 +334,35 @@ export function AdminDashboard() {
               </form>
             </div>
           </div>
+          <form className="admin-champion-selection" onSubmit={saveChampionSelections}>
+            <div>
+              <h3>Home page champions</h3>
+              <p className="admin-help">Select tournaments to show their winners once decided. This applies to completed and upcoming tournaments.</p>
+            </div>
+            <div className="admin-champion-selection__options">
+              {sortedTournaments.filter((tournament) => tournament.status !== 'draft').map((tournament) => (
+                <label key={tournament.id} className="admin-champion-selection__option">
+                  <input
+                    type="checkbox"
+                    checked={selectedChampionTournamentIds.includes(tournament.id)}
+                    onChange={(event) => setSelectedChampionTournamentIds((current) => event.target.checked
+                      ? [...current, tournament.id]
+                      : current.filter((id) => id !== tournament.id))}
+                  />
+                  <span>
+                    <strong>{tournament.name}</strong>
+                    <small>{tournament.status.replace(/_/g, ' ')}</small>
+                  </span>
+                </label>
+              ))}
+              {sortedTournaments.every((tournament) => tournament.status === 'draft') && (
+                <p className="admin-help">No public tournaments are available to select.</p>
+              )}
+            </div>
+            <button type="submit" disabled={savingChampionSelections}>
+              {savingChampionSelections ? 'Saving…' : 'Save champion selections'}
+            </button>
+          </form>
           {contentNotice && (
             <div className={`admin-content-notice admin-content-notice--${contentNotice.type}`} role="status">
               <strong>{contentNotice.type === 'success' ? 'Uploaded' : 'Upload failed'}</strong>
@@ -385,7 +438,7 @@ export function AdminDashboard() {
 
       {activeTab === 'tournaments' && (
         <>
-          <h2>{user?.role === 'superuser' ? 'Your assigned tournaments' : 'All tournaments'}</h2>
+          <h2>{user?.role === 'admin' ? 'All tournaments' : 'Your assigned tournaments'}</h2>
           <ul className="list admin-tournament-list">
             {sortedTournaments.map((t) => (
               <li key={t.id} className="admin-tournament-row">
@@ -395,16 +448,18 @@ export function AdminDashboard() {
                   {t.competition_type === 'series' && <span className="tag">Series</span>}
                   {t.series_name && <span className="admin-tournament-row__series">Series: {t.series_name}</span>}
                 </div>
-                <button className="button--danger button-sm admin-tournament-row__delete" onClick={() => deleteTournament(t)}>
-                  Delete
-                </button>
+                {user?.role !== 'superuser' && (
+                  <button className="button--danger button-sm admin-tournament-row__delete" onClick={() => deleteTournament(t)}>
+                    Delete
+                  </button>
+                )}
               </li>
             ))}
           </ul>
         </>
       )}
 
-      {activeTab === 'series' && user?.role !== 'superuser' && (
+      {activeTab === 'series' && (user?.role === 'admin' || user?.role === 'organizer') && (
         <section>
           <h2>Tournament series</h2>
           {seriesList.length > 0 ? <ul className="list">

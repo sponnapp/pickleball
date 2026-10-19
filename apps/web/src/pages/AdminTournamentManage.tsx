@@ -452,7 +452,7 @@ export function AdminTournamentManage() {
 
   // Superusers may only manage tournaments they're assigned to; verify against the admin-scoped list.
   useEffect(() => {
-    if (user?.role !== 'superuser') return;
+    if (!user || user.role === 'admin') return;
     api
       .get<{ tournaments: { id: number }[] }>('/api/tournaments/admin')
       .then((r) => setAccessDenied(!r.tournaments.some((t) => String(t.id) === id)));
@@ -650,9 +650,10 @@ export function AdminTournamentManage() {
 
   return (
     <div className="card">
-      <h1>Manage: {tournament.name}{isSeriesPlayoffs ? ' — Playoffs' : ''}</h1>
-      {isSeriesPlayoffs && <p>{teams.length} teams seeded from combined T1 and T2 Round 1 wins and point differential.</p>}
+      <h1>{user?.role === 'superuser' ? `Matches: ${tournament.name}` : `Manage: ${tournament.name}${isSeriesPlayoffs ? ' — Playoffs' : ''}`}</h1>
+      {user?.role !== 'superuser' && isSeriesPlayoffs && <p>{teams.length} teams seeded from combined T1 and T2 Round 1 wins and point differential.</p>}
 
+      {user?.role !== 'superuser' && <>
       <div className="admin-row">
         <section style={{ marginBottom: 0 }}>
           <h2>Details</h2>
@@ -1270,10 +1271,12 @@ export function AdminTournamentManage() {
       )}
       </section>
 
+      </>}
+
       <section>
         <div className="section-heading admin-matches-heading">
           <h2>Matches</h2>
-          <div className="admin-matches-actions">
+          {user?.role !== 'superuser' && <div className="admin-matches-actions">
             <button type="button" onClick={() => exportSchedule(tournament.name, matches, courts)}>
               Export Excel
             </button>
@@ -1297,9 +1300,9 @@ export function AdminTournamentManage() {
             <button type="button" className="button--outline" onClick={() => setShowManualMatchModal(true)}>
               + Add Manual Match
             </button>
-          </div>
+          </div>}
         </div>
-        {showManualMatchModal &&
+        {user?.role !== 'superuser' && showManualMatchModal &&
           createPortal(
             <div className="modal-overlay" onClick={() => setShowManualMatchModal(false)}>
               <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
@@ -1510,7 +1513,7 @@ export function AdminTournamentManage() {
                       </tr>
                     ) : (
                       filteredMatches.map((m) => (
-                        <MatchRow key={m.id} match={m} courts={courts} onChange={load} />
+                        <MatchRow key={m.id} match={m} courts={courts} onChange={load} isSuperuser={user?.role === 'superuser'} />
                       ))
                     )}
                   </tbody>
@@ -1601,7 +1604,12 @@ function computeWinner(
   return wins1 > wins2 ? team1Id : team2Id;
 }
 
-function MatchRow({ match, courts, onChange }: { match: Match; courts: Court[]; onChange: () => void }) {
+function MatchRow({ match, courts, onChange, isSuperuser = false }: {
+  match: Match;
+  courts: Court[];
+  onChange: () => void;
+  isSuperuser?: boolean;
+}) {
   const [isEditing, setIsEditing] = useState(false);
   const [time, setTime] = useState(match.scheduled_time ?? '');
   const [games, setGames] = useState<GameInput[]>(() => {
@@ -1642,21 +1650,20 @@ function MatchRow({ match, courts, onChange }: { match: Match; courts: Court[]; 
       setError('Date & time is mandatory');
       return;
     }
-
     const parsed: { team1: number; team2: number }[] = [];
-    for (const g of games) {
+    for (const game of games) {
       if (
-        g.team1.trim() === '' ||
-        g.team2.trim() === '' ||
-        isNaN(Number(g.team1)) ||
-        isNaN(Number(g.team2)) ||
-        Number(g.team1) < 0 ||
-        Number(g.team2) < 0
+        game.team1.trim() === '' ||
+        game.team2.trim() === '' ||
+        isNaN(Number(game.team1)) ||
+        isNaN(Number(game.team2)) ||
+        Number(game.team1) < 0 ||
+        Number(game.team2) < 0
       ) {
         setError('Enter a valid score for every game');
         return;
       }
-      parsed.push({ team1: Number(g.team1), team2: Number(g.team2) });
+      parsed.push({ team1: Number(game.team1), team2: Number(game.team2) });
     }
     if (parsed.length === 0) {
       setError('Score is mandatory');
@@ -1711,34 +1718,38 @@ function MatchRow({ match, courts, onChange }: { match: Match; courts: Court[]; 
       </td>
       <td>{match.round}</td>
       <td>
-        <input
-          className="match-number-input"
-          type="number"
-          min={1}
-          step={1}
-          aria-label={`Game number for ${match.team1_name ?? 'TBD'} vs ${match.team2_name ?? 'TBD'}`}
-          value={gameNumber}
-          onChange={(e) => setGameNumber(e.target.value)}
-          onBlur={async () => {
-            const value = Number(gameNumber);
-            if (!Number.isInteger(value) || value < 1) {
-              setGameNumberError('Use a positive whole number');
-              return;
-            }
-            if (value === (match.game_number ?? match.match_number)) {
-              setGameNumberError(null);
-              return;
-            }
-            try {
-              await api.patch(`/api/matches/${match.id}`, { game_number: value });
-              setGameNumberError(null);
-              onChange();
-            } catch (err) {
-              setGameNumberError(err instanceof Error ? err.message : 'Failed to save game number');
-            }
-          }}
-        />
-        {gameNumberError && <small className="error">{gameNumberError}</small>}
+        {isSuperuser ? match.game_number ?? match.match_number : (
+          <>
+            <input
+              className="match-number-input"
+              type="number"
+              min={1}
+              step={1}
+              aria-label={`Game number for ${match.team1_name ?? 'TBD'} vs ${match.team2_name ?? 'TBD'}`}
+              value={gameNumber}
+              onChange={(e) => setGameNumber(e.target.value)}
+              onBlur={async () => {
+                const value = Number(gameNumber);
+                if (!Number.isInteger(value) || value < 1) {
+                  setGameNumberError('Use a positive whole number');
+                  return;
+                }
+                if (value === (match.game_number ?? match.match_number)) {
+                  setGameNumberError(null);
+                  return;
+                }
+                try {
+                  await api.patch(`/api/matches/${match.id}`, { game_number: value });
+                  setGameNumberError(null);
+                  onChange();
+                } catch (err) {
+                  setGameNumberError(err instanceof Error ? err.message : 'Failed to save game number');
+                }
+              }}
+            />
+            {gameNumberError && <small className="error">{gameNumberError}</small>}
+          </>
+        )}
       </td>
       <td>
         <span className="match-teams">
@@ -1748,25 +1759,25 @@ function MatchRow({ match, courts, onChange }: { match: Match; courts: Court[]; 
         </span>
       </td>
       <td>
-        <select
-          value={match.court_id ?? ''}
-          onChange={(e) => api.patch(`/api/matches/${match.id}`, { court_id: Number(e.target.value) }).then(onChange)}
-        >
-          <option value="">-</option>
-          {courts.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-            </option>
-          ))}
-        </select>
+        {isSuperuser ? courts.find((court) => court.id === match.court_id)?.name ?? '-' : (
+          <select
+            value={match.court_id ?? ''}
+            onChange={(e) => api.patch(`/api/matches/${match.id}`, { court_id: Number(e.target.value) }).then(onChange)}
+          >
+            <option value="">-</option>
+            {courts.map((court) => <option key={court.id} value={court.id}>{court.name}</option>)}
+          </select>
+        )}
       </td>
       <td>
-        <input
-          type="datetime-local"
-          value={time}
-          onChange={(e) => setTime(e.target.value)}
-          onBlur={() => api.patch(`/api/matches/${match.id}`, { scheduled_time: time }).then(onChange)}
-        />
+        {isSuperuser ? time.replace('T', ' ') || '-' : (
+          <input
+            type="datetime-local"
+            value={time}
+            onChange={(e) => setTime(e.target.value)}
+            onBlur={() => api.patch(`/api/matches/${match.id}`, { scheduled_time: time }).then(onChange)}
+          />
+        )}
       </td>
       <td>
         {isFormOpen ? (
@@ -1846,9 +1857,7 @@ function MatchRow({ match, courts, onChange }: { match: Match; courts: Court[]; 
       </td>
       <td>
         <span>{match.status}</span>
-        <button type="button" className="button-sm button--danger match-delete-button" onClick={deleteMatch}>
-          Delete
-        </button>
+        {!isSuperuser && <button type="button" className="button-sm button--danger match-delete-button" onClick={deleteMatch}>Delete</button>}
       </td>
     </tr>
   );

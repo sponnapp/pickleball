@@ -83,6 +83,37 @@ homeRoutes.get('/home-content', async (c) => {
   });
 });
 
+homeRoutes.get('/home-content/champions', async (c) => {
+  const { results } = await c.env.DB.prepare(
+    'SELECT tournament_id FROM homepage_champion_tournaments ORDER BY created_at, tournament_id'
+  ).all<{ tournament_id: number }>();
+  return c.json({ selectedTournamentIds: results.map((row) => row.tournament_id) });
+});
+
+homeRoutes.patch('/admin/home-content/champions', requireSuperAdmin, async (c) => {
+  const body = await c.req.json<{ tournamentIds?: unknown }>();
+  if (!Array.isArray(body.tournamentIds) || body.tournamentIds.some((id) => !Number.isInteger(id) || Number(id) < 1)) {
+    return c.json({ error: 'tournamentIds must be an array of positive tournament IDs' }, 400);
+  }
+  const tournamentIds = [...new Set(body.tournamentIds as number[])];
+  if (tournamentIds.length > 0) {
+    const placeholders = tournamentIds.map(() => '?').join(', ');
+    const { results } = await c.env.DB.prepare(
+      `SELECT id FROM tournaments WHERE status != 'draft' AND id IN (${placeholders})`
+    )
+      .bind(...tournamentIds)
+      .all<{ id: number }>();
+    if (results.length !== tournamentIds.length) return c.json({ error: 'One or more selected tournaments are unavailable' }, 400);
+  }
+
+  const statements = [c.env.DB.prepare('DELETE FROM homepage_champion_tournaments')];
+  statements.push(...tournamentIds.map((id) => c.env.DB.prepare(
+    'INSERT INTO homepage_champion_tournaments (tournament_id) VALUES (?)'
+  ).bind(id)));
+  await c.env.DB.batch(statements);
+  return c.json({ selectedTournamentIds: tournamentIds });
+});
+
 homeRoutes.get('/admin/home-content/brochures', requireSuperAdmin, async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT b.id, b.target_type, b.target_id, b.title, b.brochure_path, b.visible,
