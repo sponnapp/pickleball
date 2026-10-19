@@ -42,6 +42,7 @@ export function AdminDashboard() {
   const [heroPreviewUrl, setHeroPreviewUrl] = useState<string | null>(null);
   const [sponsors, setSponsors] = useState<Sponsor[]>([]);
   const [selectedChampionTournamentIds, setSelectedChampionTournamentIds] = useState<number[]>([]);
+  const [championDisplayTitles, setChampionDisplayTitles] = useState<Record<number, string>>({});
   const [savingChampionSelections, setSavingChampionSelections] = useState(false);
   const [sponsorName, setSponsorName] = useState('');
   const [sponsorLogoUrl, setSponsorLogoUrl] = useState('');
@@ -86,8 +87,11 @@ export function AdminDashboard() {
       api.get<{ series: CompetitionSeries[] }>('/api/tournaments/admin/series').then((r) => setSeriesList(r.series));
     }
     if (user?.role === 'admin') {
-      api.get<{ selectedTournamentIds: number[] }>('/api/home-content/champions')
-        .then((r) => setSelectedChampionTournamentIds(r.selectedTournamentIds));
+      api.get<{ selectedTournamentIds: number[]; displayTitles: Record<number, string> }>('/api/home-content/champions')
+        .then((r) => {
+          setSelectedChampionTournamentIds(r.selectedTournamentIds);
+          setChampionDisplayTitles(r.displayTitles);
+        });
       api.get<{ sponsors: Sponsor[] }>('/api/home-content').then((r) => {
         setSponsors(r.sponsors);
       });
@@ -221,7 +225,10 @@ export function AdminDashboard() {
     setSavingChampionSelections(true);
     setContentNotice(null);
     try {
-      await api.patch('/api/admin/home-content/champions', { tournamentIds: selectedChampionTournamentIds });
+      await api.patch('/api/admin/home-content/champions', {
+        tournamentIds: selectedChampionTournamentIds,
+        displayTitles: championDisplayTitles,
+      });
       setContentNotice({ type: 'success', message: 'Home page champion selections saved.' });
     } catch (err) {
       const message = err instanceof ApiError ? err.message : 'Failed to save home page champion selections';
@@ -341,19 +348,32 @@ export function AdminDashboard() {
             </div>
             <div className="admin-champion-selection__options">
               {sortedTournaments.filter((tournament) => tournament.status !== 'draft').map((tournament) => (
-                <label key={tournament.id} className="admin-champion-selection__option">
-                  <input
-                    type="checkbox"
-                    checked={selectedChampionTournamentIds.includes(tournament.id)}
-                    onChange={(event) => setSelectedChampionTournamentIds((current) => event.target.checked
-                      ? [...current, tournament.id]
-                      : current.filter((id) => id !== tournament.id))}
-                  />
-                  <span>
-                    <strong>{tournament.name}</strong>
-                    <small>{tournament.status.replace(/_/g, ' ')}</small>
-                  </span>
-                </label>
+                <div key={tournament.id} className="admin-champion-selection__item">
+                  <label className="admin-champion-selection__option">
+                    <input
+                      type="checkbox"
+                      checked={selectedChampionTournamentIds.includes(tournament.id)}
+                      onChange={(event) => setSelectedChampionTournamentIds((current) => event.target.checked
+                        ? [...current, tournament.id]
+                        : current.filter((id) => id !== tournament.id))}
+                    />
+                    <span>
+                      <strong>{tournament.name}</strong>
+                      <small>{tournament.status.replace(/_/g, ' ')}</small>
+                    </span>
+                  </label>
+                  {selectedChampionTournamentIds.includes(tournament.id) && (
+                    <label className="admin-champion-selection__title">
+                      Display title
+                      <input
+                        value={championDisplayTitles[tournament.id] ?? ''}
+                        maxLength={80}
+                        placeholder="e.g., WOMEN'S DOUBLES"
+                        onChange={(event) => setChampionDisplayTitles((current) => ({ ...current, [tournament.id]: event.target.value }))}
+                      />
+                    </label>
+                  )}
+                </div>
               ))}
               {sortedTournaments.every((tournament) => tournament.status === 'draft') && (
                 <p className="admin-help">No public tournaments are available to select.</p>

@@ -85,17 +85,29 @@ homeRoutes.get('/home-content', async (c) => {
 
 homeRoutes.get('/home-content/champions', async (c) => {
   const { results } = await c.env.DB.prepare(
-    'SELECT tournament_id FROM homepage_champion_tournaments ORDER BY created_at, tournament_id'
-  ).all<{ tournament_id: number }>();
-  return c.json({ selectedTournamentIds: results.map((row) => row.tournament_id) });
+    'SELECT tournament_id, display_title FROM homepage_champion_tournaments ORDER BY created_at, tournament_id'
+  ).all<{ tournament_id: number; display_title: string | null }>();
+  return c.json({
+    selectedTournamentIds: results.map((row) => row.tournament_id),
+    displayTitles: Object.fromEntries(results.map((row) => [row.tournament_id, row.display_title ?? ''])),
+  });
 });
 
 homeRoutes.patch('/admin/home-content/champions', requireSuperAdmin, async (c) => {
-  const body = await c.req.json<{ tournamentIds?: unknown }>();
+  const body = await c.req.json<{ tournamentIds?: unknown; displayTitles?: unknown }>();
   if (!Array.isArray(body.tournamentIds) || body.tournamentIds.some((id) => !Number.isInteger(id) || Number(id) < 1)) {
     return c.json({ error: 'tournamentIds must be an array of positive tournament IDs' }, 400);
   }
+  if (body.displayTitles !== undefined && (!body.displayTitles || typeof body.displayTitles !== 'object' || Array.isArray(body.displayTitles))) {
+    return c.json({ error: 'displayTitles must be an object keyed by tournament ID' }, 400);
+  }
   const tournamentIds = [...new Set(body.tournamentIds as number[])];
+  const displayTitles = (body.displayTitles ?? {}) as Record<string, unknown>;
+  for (const [id, title] of Object.entries(displayTitles)) {
+    if (!Number.isInteger(Number(id)) || typeof title !== 'string' || title.trim().length > 80) {
+      return c.json({ error: 'Champion display titles must be text up to 80 characters' }, 400);
+    }
+  }
   if (tournamentIds.length > 0) {
     const placeholders = tournamentIds.map(() => '?').join(', ');
     const { results } = await c.env.DB.prepare(
@@ -108,8 +120,8 @@ homeRoutes.patch('/admin/home-content/champions', requireSuperAdmin, async (c) =
 
   const statements = [c.env.DB.prepare('DELETE FROM homepage_champion_tournaments')];
   statements.push(...tournamentIds.map((id) => c.env.DB.prepare(
-    'INSERT INTO homepage_champion_tournaments (tournament_id) VALUES (?)'
-  ).bind(id)));
+    'INSERT INTO homepage_champion_tournaments (tournament_id, display_title) VALUES (?, ?)'
+  ).bind(id, typeof displayTitles[String(id)] === 'string' ? (displayTitles[String(id)] as string).trim() || null : null)));
   await c.env.DB.batch(statements);
   return c.json({ selectedTournamentIds: tournamentIds });
 });

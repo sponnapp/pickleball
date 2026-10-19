@@ -1328,6 +1328,10 @@ matchRoutes.get('/tournaments/:tournamentId/tier-results', async (c) => {
         completed: finalMatch?.status === 'completed',
         winner: winnerName,
         runnerUp: runnerUpName,
+        winnerTeamId: finalMatch?.winner_id ?? null,
+        runnerUpTeamId: finalMatch?.winner_id
+          ? finalMatch.winner_id === finalMatch.team1_id ? finalMatch.team2_id : finalMatch.team1_id
+          : null,
         matches,
       };
     });

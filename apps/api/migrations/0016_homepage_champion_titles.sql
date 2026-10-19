@@ -1,0 +1,1 @@
+ALTER TABLE homepage_champion_tournaments ADD COLUMN display_title TEXT;

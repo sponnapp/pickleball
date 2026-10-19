@@ -2269,6 +2269,23 @@ button.button--danger:hover,
   border-bottom: 1px solid rgba(23, 53, 44, 0.1);
 }
 
+.admin-champion-selection__item {
+  min-width: 0;
+}
+
+.admin-champion-selection__title {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 10px 27px;
+  color: #6d7c74;
+  font-size: 0.82rem;
+}
+
+.admin-champion-selection__title input {
+  width: 100%;
+  min-width: 0;
+}
+
 .admin-champion-selection__option input {
   flex: 0 0 auto;
   margin-top: 4px;
@@ -2973,7 +2990,7 @@ button.button--danger:hover,
 
 .tournament-winner-banner__grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
 }
 
@@ -2997,17 +3014,26 @@ button.button--danger:hover,
   color: #b45309;
 }
 
-.winner-card__name {
+.winner-card__players {
+  margin-top: 0;
   font-family: 'Space Grotesk', sans-serif;
   font-size: 1.15rem;
   font-weight: 700;
   color: #146c43;
 }
 
-.winner-card__runner {
+.winner-card__runner-players {
+  margin-top: -3px;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #557a46;
+}
+
+.winner-card__team-name {
   font-family: 'DM Sans', sans-serif;
-  font-size: 0.9rem;
+  font-size: 0.88rem;
   font-weight: 600;
-  color: #4b5563;
+  color: #65786e;
 }
 

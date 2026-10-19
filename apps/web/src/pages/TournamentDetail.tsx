@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { api, ApiError } from '../api';
+import { getTeamPlayerNames } from '../tournamentWinners';
 
 interface Tournament {
   id: number;
@@ -75,6 +76,8 @@ interface TierResult {
   completed: boolean;
   winner: string | null;
   runnerUp: string | null;
+  winnerTeamId?: number | null;
+  runnerUpTeamId?: number | null;
   matches?: PlayoffMatch[];
 }
 
@@ -333,6 +336,8 @@ interface TournamentWinner {
   winner: string;
   runnerUp?: string | null;
   tier?: string;
+  winnerTeamId?: number | null;
+  runnerUpTeamId?: number | null;
 }
 
 function getTournamentWinners(
@@ -362,6 +367,8 @@ function getTournamentWinners(
         winner: t.winner!,
         runnerUp: t.runnerUp,
         tier: t.tier,
+        winnerTeamId: t.winnerTeamId,
+        runnerUpTeamId: t.runnerUpTeamId,
       });
     }
     return winners;
@@ -392,6 +399,8 @@ function getTournamentWinners(
             winner: winnerName,
             runnerUp: runnerUpName,
             tier: finalMatch.bracket_type,
+            winnerTeamId: finalMatch.winner_id,
+            runnerUpTeamId: finalMatch.winner_id === finalMatch.team1_id ? finalMatch.team2_id : finalMatch.team1_id,
           });
           return winners;
         }
@@ -407,7 +416,14 @@ function getTournamentWinners(
       const winnerName = directFinal.winner_id === directFinal.team1_id ? directFinal.team1_name : directFinal.team2_name;
       const runnerUpName = directFinal.winner_id === directFinal.team1_id ? directFinal.team2_name : directFinal.team1_name;
       if (winnerName) {
-        return [{ label: 'Tournament Champion', winner: winnerName, runnerUp: runnerUpName, tier: 'main' }];
+        return [{
+          label: 'Tournament Champion',
+          winner: winnerName,
+          runnerUp: runnerUpName,
+          tier: 'main',
+          winnerTeamId: directFinal.winner_id,
+          runnerUpTeamId: directFinal.winner_id === directFinal.team1_id ? directFinal.team2_id : directFinal.team1_id,
+        }];
       }
     }
   }
@@ -421,6 +437,8 @@ function getTournamentWinners(
         label: 'Tournament Champion',
         winner: standings[0].teamName,
         runnerUp: standings[1]?.teamName,
+        winnerTeamId: standings[0].teamId,
+        runnerUpTeamId: standings[1]?.teamId,
       });
     }
   }
@@ -556,18 +574,28 @@ export function TournamentDetail() {
             </div>
           </div>
           <div className="tournament-winner-banner__grid">
-            {winners.map((w, idx) => (
-              <div key={idx} className="winner-card">
+            {winners.map((w, idx) => {
+              const winnerPlayers = getTeamPlayerNames(w.winnerTeamId, teams);
+              const runnerUpPlayers = getTeamPlayerNames(w.runnerUpTeamId, teams);
+              return <div key={idx} className="winner-card">
                 {w.tier && ['platinum', 'gold', 'silver', 'bronze'].includes(w.tier) && (
                   <span className={`tier-badge tier-badge--${w.tier}`} style={{ alignSelf: 'flex-start' }}>
                     {w.tier}
                   </span>
                 )}
                 <div className="winner-card__label">{w.label}</div>
-                <div className="winner-card__name">🥇 {w.winner}</div>
-                {w.runnerUp && <div className="winner-card__runner">🥈 {w.runnerUp}</div>}
+                <div className="winner-card__players">
+                  🥇 Winner: {winnerPlayers ?? w.winner}
+                  {winnerPlayers && <span className="winner-card__team-name"> ({w.winner})</span>}
+                </div>
+                {w.runnerUp && (
+                  <div className="winner-card__runner-players">
+                    🥈 Runner-up: {runnerUpPlayers ?? w.runnerUp}
+                    {runnerUpPlayers && <span className="winner-card__team-name"> ({w.runnerUp})</span>}
+                  </div>
+                )}
               </div>
-            ))}
+            })}
           </div>
         </div>
       )}

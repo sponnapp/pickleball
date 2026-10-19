@@ -16,6 +16,7 @@ export interface WinnerMatch {
 }
 
 export interface WinnerStanding {
+  teamId: number;
   teamName: string;
 }
 
@@ -24,6 +25,14 @@ export interface WinnerTierResult {
   completed: boolean;
   winner: string | null;
   runnerUp: string | null;
+  winnerTeamId?: number | null;
+  runnerUpTeamId?: number | null;
+}
+
+export interface WinnerTeam {
+  id: number;
+  player1_name: string;
+  player2_name: string | null;
 }
 
 export interface TournamentWinner {
@@ -31,13 +40,22 @@ export interface TournamentWinner {
   winner: string;
   runnerUp?: string | null;
   tier?: string;
+  winnerTeamId?: number | null;
+  runnerUpTeamId?: number | null;
+}
+
+export function getTeamPlayerNames(teamId: number | null | undefined, teams: WinnerTeam[]): string | null {
+  const team = teams.find((candidate) => candidate.id === teamId);
+  if (!team) return null;
+  return [team.player1_name, team.player2_name].filter(Boolean).join(' & ') || null;
 }
 
 export function getTournamentWinners(
   tournament: WinnerTournament,
   tierResults: WinnerTierResult[],
   matches: WinnerMatch[],
-  standings: WinnerStanding[]
+  standings: WinnerStanding[],
+  teams: WinnerTeam[]
 ): TournamentWinner[] {
   const winners: TournamentWinner[] = [];
 
@@ -53,7 +71,14 @@ export function getTournamentWinners(
       const label = completedTiers.length === 1 && tier.tier === 'platinum'
         ? 'Tournament Champion'
         : `${tierTitle} Champion`;
-      winners.push({ label, winner: tier.winner!, runnerUp: tier.runnerUp, tier: tier.tier });
+      winners.push({
+        label,
+        winner: tier.winner!,
+        runnerUp: tier.runnerUp,
+        tier: tier.tier,
+        winnerTeamId: tier.winnerTeamId,
+        runnerUpTeamId: tier.runnerUpTeamId,
+      });
     }
     return winners;
   }
@@ -68,7 +93,14 @@ export function getTournamentWinners(
       if (finalMatch) {
         const winnerName = finalMatch.winner_id === finalMatch.team1_id ? finalMatch.team1_name : finalMatch.team2_name;
         const runnerUpName = finalMatch.winner_id === finalMatch.team1_id ? finalMatch.team2_name : finalMatch.team1_name;
-        if (winnerName) winners.push({ label: 'Tournament Champion', winner: winnerName, runnerUp: runnerUpName, tier: finalMatch.bracket_type });
+        if (winnerName) winners.push({
+          label: 'Tournament Champion',
+          winner: winnerName,
+          runnerUp: runnerUpName,
+          tier: finalMatch.bracket_type,
+          winnerTeamId: finalMatch.winner_id,
+          runnerUpTeamId: finalMatch.winner_id === finalMatch.team1_id ? finalMatch.team2_id : finalMatch.team1_id,
+        });
         return winners;
       }
     }
@@ -81,14 +113,27 @@ export function getTournamentWinners(
     if (directFinal) {
       const winnerName = directFinal.winner_id === directFinal.team1_id ? directFinal.team1_name : directFinal.team2_name;
       const runnerUpName = directFinal.winner_id === directFinal.team1_id ? directFinal.team2_name : directFinal.team1_name;
-      if (winnerName) return [{ label: 'Tournament Champion', winner: winnerName, runnerUp: runnerUpName, tier: 'main' }];
+      if (winnerName) return [{
+        label: 'Tournament Champion',
+        winner: winnerName,
+        runnerUp: runnerUpName,
+        tier: 'main',
+        winnerTeamId: directFinal.winner_id,
+        runnerUpTeamId: directFinal.winner_id === directFinal.team1_id ? directFinal.team2_id : directFinal.team1_id,
+      }];
     }
   }
 
   if (tournament.format === 'round_robin' && standings.length > 0) {
     const allMatchesCompleted = matches.length > 0 && matches.every((match) => match.status === 'completed');
     if (tournament.status === 'completed' || allMatchesCompleted) {
-      winners.push({ label: 'Tournament Champion', winner: standings[0].teamName, runnerUp: standings[1]?.teamName });
+      winners.push({
+        label: 'Tournament Champion',
+        winner: standings[0].teamName,
+        runnerUp: standings[1]?.teamName,
+        winnerTeamId: standings[0].teamId,
+        runnerUpTeamId: standings[1]?.teamId,
+      });
     }
   }
 
